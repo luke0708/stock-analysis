@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<!--
+  集成代码片段 - 用于主网页（stock-monitor-2025.web.app）
+  
+  使用方法：
+  1. 将此代码添加到主网页的 HTML 中
+  2. 替换 STREAMLIT_APP_URL 为实际部署的 URL
+  3. 调整样式以匹配主网页风格
+-->
+
+<!-- ===== 1. 在导航栏添加新 Tab ===== -->
+<!-- 找到现有的 tab 按钮区域，添加： -->
+
+<button class="tab-button" onclick="showTab('analysis')" id="analysis-tab-btn">
+  📈 资金分析
+</button>
+
+<!-- ===== 2. 添加 Tab 内容区域 ===== -->
+<!-- 在其他 tab-content 后面添加： -->
+
+<div id="analysis-tab" class="tab-content" style="display: none;">
+  <div class="analysis-container">
+    <div class="analysis-header">
+      <h2>📈 实时资金流向分析</h2>
+      <p class="subtitle">基于分钟级数据的多维度技术分析</p>
+    </div>
+    
+    <!-- Loading 状态 -->
+    <div id="analysis-loading" class="loading-indicator">
+      <div class="spinner"></div>
+      <p>正在加载分析系统...</p>
+    </div>
+    
+    <!-- Streamlit 应用 iframe -->
+    <iframe 
+      id="analysis-iframe"
+      src="https://YOUR_APP_NAME.streamlit.app"
+      width="100%"
+      height="0"
+      frameborder="0"
+      allow="clipboard-write"
+      onload="handleIframeLoad()"
+      style="display: none; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.1);">
+    </iframe>
+    
+    <div class="analysis-footer">
+      <p class="disclaimer">
+        ⚠️ 数据分析仅供参考，不构成投资建议
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 3. 添加样式 ===== -->
+<style>
+.analysis-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.analysis-header {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.analysis-header h2 {
+  color: #1890ff;
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+.analysis-header .subtitle {
+  color: #666;
+  font-size: 14px;
+}
+
+/* Loading 动画 */
+.loading-indicator {
+  text-align: center;
+  padding: 80px 20px;
+}
+
+.spinner {
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #1890ff;
+  border-radius: 50%;
+  width: 50px;
+  height: 50px;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 20px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* iframe 样式 */
+#analysis-iframe {
+  transition: opacity 0.3s ease-in-out;
+  min-height: 900px;
+}
+
+#analysis-iframe.loaded {
+  opacity: 1;
+}
+
+.analysis-footer {
+  text-align: center;
+  margin-top: 20px;
+  padding: 15px;
+  background: #fff9e6;
+  border-radius: 4px;
+}
+
+.analysis-footer .disclaimer {
+  color: #d48806;
+  font-size: 13px;
+  margin: 0;
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .analysis-container {
+    padding: 10px;
+  }
+  
+  .analysis-header h2 {
+    font-size: 22px;
+  }
+  
+  #analysis-iframe {
+    min-height: calc(100vh - 180px);
+  }
+}
+</style>
+
+<!-- ===== 4. 添加 JavaScript ===== -->
+<script>
+// Tab 切换函数（如果主网页已有，可以合并）
+function showTab(tabName) {
+  // 隐藏所有 tab content
+  const allTabs = document.querySelectorAll('.tab-content');
+  allTabs.forEach(tab => {
+    tab.style.display = 'none';
+  });
+  
+  // 移除所有 tab button 的 active 状态
+  const allButtons = document.querySelectorAll('.tab-button');
+  allButtons.forEach(btn => {
+    btn.classList.remove('active');
+  });
+  
+  // 显示选中的 tab
+  const selectedTab = document.getElementById(tabName + '-tab');
+  if (selectedTab) {
+    selectedTab.style.display = 'block';
+  }
+  
+  // 激活按钮
+  const selectedBtn = document.getElementById(tabName + '-tab-btn');
+  if (selectedBtn) {
+    selectedBtn.classList.add('active');
+  }
+  
+  // 如果是分析 tab，调整 iframe 高度
+  if (tabName === 'analysis') {
+    adjustIframeHeight();
+  }
+}
+
+// iframe 加载完成处理
+function handleIframeLoad() {
+  const iframe = document.getElementById('analysis-iframe');
+  const loading = document.getElementById('analysis-loading');
+  
+  // 隐藏 loading
+  if (loading) {
+    loading.style.display = 'none';
+  }
+  
+  // 显示 iframe
+  if (iframe) {
+    iframe.style.display = 'block';
+    iframe.style.height = '900px';
+    iframe.classList.add('loaded');
+  }
+}
+
+// 调整 iframe 高度（响应式）
+function adjustIframeHeight() {
+  const iframe = document.getElementById('analysis-iframe');
+  if (iframe && window.innerWidth <= 768) {
+    iframe.style.height = (window.innerHeight - 180) + 'px';
+  } else if (iframe) {
+    iframe.style.height = '900px';
+  }
+}
+
+// 监听窗口大小变化
+window.addEventListener('resize', adjustIframeHeight);
+
+// 页面加载时的初始化
+document.addEventListener('DOMContentLoaded', function() {
+  // 可以设置默认 tab
+  // showTab('profit'); // 或其他默认 tab
+});
+</script>
+
+<!-- ===== 使用说明 ===== -->
+<!--
+1. 复制上面的代码
+2. 根据主网页现有结构调整：
+   - tab-button 和 tab-content 的 class 名称
+   - 颜色主题（#1890ff 改为主网页主色调）
+   - 字体和间距
+3. 替换 iframe src 为实际的 Streamlit 应用 URL
+4. 测试响应式效果
+5. 部署！
+
+提示：
+- 如果主网页已有 tab 切换逻辑，整合到现有函数中
+- 可以添加更多交互，如从持仓列表传参给分析模块
+- 建议在本地测试后再部署到 Firebase
+-->

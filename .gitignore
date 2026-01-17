@@ -1,0 +1,31 @@
+# .gitignore - 部署前需要提交到 GitHub
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 项目特定
+exported_data/
+*.csv
+.env
+
+# Streamlit
+.streamlit/secrets.toml
