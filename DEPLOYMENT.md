@@ -48,17 +48,50 @@ nohup streamlit run stock_analysis/ui/unified_app.py --server.port=8501 >/tmp/st
 lsof -i:8501
 ```
 
-## 3. Streamlit Cloud（展示/共享）
+## 3. Streamlit Cloud 部署 (推荐)
 
-1. 推送代码到 GitHub。
-2. 在 Streamlit Cloud 创建应用，入口文件填 `stock_analysis/ui/unified_app.py`。
-3. 在 Secrets 中配置 `TUSHARE_TOKEN`、`DEEPSEEK_API_KEY`（如需）。
+最适合分享和展示的免费方案。
+
+### 3.1 准备工作
+- GitHub 账号
+- Streamlit Cloud 账号
+
+### 3.2 部署步骤
+1. **推送到 GitHub**
+   ```bash
+   git init
+   git add .
+   git commit -m "Initial commit"
+   git branch -M main
+   # 替换为你的仓库地址
+   git remote add origin https://github.com/YOUR_USERNAME/stock-analysis.git
+   git push -u origin main
+   ```
+
+2. **在 Streamlit Cloud 创建应用**
+   - 访问 [share.streamlit.io](https://share.streamlit.io)
+   - 点击 "New app"
+   - 选择 Repository: `stock-analysis`
+   - Main file path: `stock_analysis/ui/unified_app.py`
+   - 点击 "Deploy"
+
+3. **配置 Secrets (环境变量)**
+   - 在应用管理界面点击 "Advanced settings" -> "Secrets"
+   - 添加配置：
+     ```toml
+     TUSHARE_TOKEN = "your_token_here"
+     DEEPSEEK_API_KEY = "your_key_here"
+     ```
+
+**优缺点**：
+- ✅ 完全免费，自动 HTTPS，随时随地访问
+- ❌ 资源有限 (1GB RAM)，休眠后需冷启动
 
 ## 4. Docker（可选）
 
 ```dockerfile
 FROM python:3.9-slim
-WORKDIR /app
+
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY . .
