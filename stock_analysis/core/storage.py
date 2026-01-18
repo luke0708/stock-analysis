@@ -66,5 +66,9 @@ class StorageManager:
         """获取所有自选股代码"""
         stocks = self.load_watchlist()
         return [s['code'] for s in stocks]
+    
+    def get_watchlist(self) -> List[Dict]:
+        """获取自选股列表 (alias for load_watchlist)"""
+        return self.load_watchlist()
 
 from datetime import datetime as import_datetime

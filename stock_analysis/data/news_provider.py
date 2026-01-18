@@ -33,23 +33,63 @@ class StockNewsProvider:
     @staticmethod
     def get_market_news(limit=20) -> pd.DataFrame:
         """
-        获取市场要闻
+        获取市场要闻 (使用新浪直连 API 替代 AkShare 以提升速度)
         
         Args:
             limit: 返回新闻数量
             
         Returns:
-            DataFrame包含市场新闻
+            DataFrame: 包含新闻列表, columns=['发布时间', '新闻标题', '新闻内容']
         """
         try:
-            # 获取财经要闻
-            df = ak.stock_news_em(symbol="全部")
-            if not df.empty and len(df) > limit:
-                df = df.head(limit)
-            return df
+            import requests
+            import time
+            from datetime import datetime
+            
+            # 新浪财经滚动新闻 API (直连)
+            # pageid=153 (个股), lid=2509 (全部)
+            sina_url = "https://feed.mix.sina.com.cn/api/roll/get?pageid=153&lid=2509&k=&num={}&page=1".format(limit)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            
+            resp = requests.get(sina_url, headers=headers, timeout=3)
+            if resp.status_code == 200:
+                data = resp.json()
+                items = data.get('result', {}).get('data', [])
+                
+                news_list = []
+                for item in items:
+                    # 转换时间戳
+                    ctime = item.get('ctime', '')
+                    try:
+                        time_str = datetime.fromtimestamp(int(ctime)).strftime('%Y-%m-%d %H:%M:%S')
+                    except:
+                        time_str = str(ctime)
+                        
+                    news_list.append({
+                        '发布时间': time_str,
+                        '新闻标题': item.get('title', ''),
+                        '新闻内容': item.get('intro', '') or item.get('title', '') # Intro is summary
+                    })
+                
+                return pd.DataFrame(news_list)
+            else:
+                print(f"Sina API status: {resp.status_code}")
+                # Fallback to AkShare if direct fail
+                df = ak.stock_news_em(symbol="全部")
+                if not df.empty and len(df) > limit:
+                    df = df.head(limit)
+                return df
+                
         except Exception as e:
-            print(f"获取市场新闻失败: {e}")
-            return pd.DataFrame()
+            print(f"获取市场新闻失败 (Direct): {e}")
+            # Fallback
+            try:
+                df = ak.stock_news_em(symbol="全部")
+                return df.head(limit) if not df.empty else pd.DataFrame()
+            except:
+                return pd.DataFrame()
     
     @staticmethod
     def format_news_item(news_row) -> str:

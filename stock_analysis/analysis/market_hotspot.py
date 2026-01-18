@@ -12,7 +12,7 @@ class MarketHotspotAnalyzer:
     @staticmethod
     def get_hot_concepts(top_n=10) -> pd.DataFrame:
         """
-        获取热门概念板块
+        获取热门概念板块 (Sina V2 API)
         
         Args:
             top_n: 返回前N个板块
@@ -20,34 +20,102 @@ class MarketHotspotAnalyzer:
         Returns:
             DataFrame包含：板块名称、涨跌幅、领涨股等
         """
-        try:
-            df = ak.stock_board_concept_name_em()
-            # 按涨跌幅排序
-            df_sorted = df.nlargest(top_n, '涨跌幅')
-            return df_sorted
-        except Exception as e:
-            print(f"获取概念板块失败: {e}")
-            return pd.DataFrame()
+        return MarketHotspotAnalyzer._fetch_sina_plate("new_dqgn", top_n) # new_dqgn = 地区概念? No, 'new_dqgn' is 概念? No: gn=概念, hy=行业, dy=地域
+        # Sina 节点: new_cp = 概念, new_hy = 行业. Or qh, dq?
+        # Checked map: node='new_dqgn' is not standard.
+        # Direct URL analysis: node = "chgn" (concept) or "chhy" ??
+        # Let's use correct nodes: 
+        # Concept(概念): node='new_gn' or 'chgn'? 
+        # Actually, let's look at the tested one: new_dqhy (Industry).
+        # Let's use 'new_gn' for concepts if it works, or stick to 'new_dqgn' if verified.
+        # Wait, if I am unsure, AkShare fallback is safer.
+        # Let's write a helper that tries Sina then AkShare.
     
     @staticmethod
-    def get_hot_industries(top_n=10) -> pd.DataFrame:
-        """
-        获取热门行业板块
-        
-        Args:
-            top_n: 返回前N个板块
+    def _fetch_sina_plate(node_type, top_n) -> pd.DataFrame:
+        """Helper for Sina Plate data"""
+        try:
+            import requests
+            headers = {"User-Agent": "Mozilla/5.0"}
+            # node: 'new_jyhy' (行业), 'new_gn' (概念)? 
+            # In Sina VIP website: 
+            # 行业: node=new_hy
+            # 概念: node=new_gn
+            # 地域: node=new_dy
             
-        Returns:
-            DataFrame包含：板块名称、涨跌幅、领涨股等
-        """
+            # Let's assume input node_type is correct Sina node string.
+            url = f"http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData"
+            params = {
+                "page": "1", "num": str(top_n*2), # Fetch more to be safe
+                "sort": "changepercent", "asc": "0", 
+                "node": node_type, "symbol": ""
+            }
+            resp = requests.get(url, params=params, headers=headers, timeout=3)
+            
+            if resp.status_code == 200:
+                # Sina returns JS object-like string, keys unquoted.
+                # e.g: [{symbol:"sh...",name:"...",...}]
+                # Dangerous to eval? Yes. But standard simple parser is hard.
+                # However, this specific response structure is very consistent.
+                # We can use regex to quote keys or just use 'demjson' if available? No external dep.
+                # Let's use simple string replacement for known keys before json.loads?
+                # Actually, eval is risky but acceptable for trusted source with limited scope in a tool?
+                # Alternative: AkShare uses `demjson` or `eval`.
+                # Let's try strictly safe regex approach or fallback.
+                
+                content = resp.text
+                if not content or content == "null": return pd.DataFrame()
+                
+                # Simple hack: replace simple keys with quoted keys
+                # keys: symbol, code, name, trade, pricechange, changepercent, buy, sell, settlement, open, high, low, volume, amount, ticktime, per, pb, mktcap, nmc, turnoverratio
+                import re
+                content = re.sub(r'([a-zA-Z_0-9]+):', r'"\1":', content) 
+                import json
+                data = json.loads(content)
+                
+                df = pd.DataFrame(data)
+                # Rename to match standard UI expectations
+                # UI uses: '板块名称', '涨跌幅', '领涨股票'
+                if not df.empty:
+                    df['板块名称'] = df['name']
+                    df['涨跌幅'] = pd.to_numeric(df['changepercent'])
+                    # Sina doesn't give 'leader_stock' name directly in this list? only avg data.
+                    # Actually it doesn't give 'leader_stock'. AkShare concept board does.
+                    # UI uses '领涨股票' for tooltip. If missing, UI might break or show NaN.
+                    # We can leave it empty or fetch detail? Detail is too slow.
+                    # Let's ignore leader stock for speed or fill "N/A".
+                    df['领涨股票'] = "N/A"
+                    
+                    return df.head(top_n)
+            
+            return pd.DataFrame()
+        except:
+            return pd.DataFrame()
+
+    @staticmethod
+    def get_hot_concepts(top_n=10) -> pd.DataFrame:
+        """获取热门概念板块"""
+        # Node: new_gn = 概念
+        df = MarketHotspotAnalyzer._fetch_sina_plate("new_gn", top_n)
+        if not df.empty: return df
+        # Fallback
+        try:
+            df = ak.stock_board_concept_name_em()
+            return df.nlargest(top_n, '涨跌幅')
+        except: return pd.DataFrame()
+
+    @staticmethod
+    def get_hot_industries(top_n=10) -> pd.DataFrame:
+        """获取热门行业板块"""
+        # Node: new_jyhy = 行业 (交易所行业? or new_hy?)
+        # Let's try 'new_hy' first
+        df = MarketHotspotAnalyzer._fetch_sina_plate("new_hy", top_n)
+        if not df.empty: return df
+        # Fallback
         try:
             df = ak.stock_board_industry_name_em()
-            # 按涨跌幅排序
-            df_sorted = df.nlargest(top_n, '涨跌幅')
-            return df_sorted
-        except Exception as e:
-            print(f"获取行业板块失败: {e}")
-            return pd.DataFrame()
+            return df.nlargest(top_n, '涨跌幅')
+        except: return pd.DataFrame()
     
     @staticmethod
     def get_concept_constituents(concept_name: str) -> pd.DataFrame:

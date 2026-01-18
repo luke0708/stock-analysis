@@ -241,16 +241,68 @@ def display_results(stock_code, analysis_date):
     
     st.markdown("---")
     
-    # ===== 第三行：资金流向 (2列) =====
-    st.subheader("💰 资金流向分析")
+    # ===== 第三行：资金流向分析 =====
+    st.subheader("💰 资金流向全景监控")
+    
+    # 计算分时资金流数据
+    df_chart = df.copy()
+    
+    def calc_net(row):
+        amt = row.get('成交额(元)', row.get('amount', 0))
+        nature = str(row.get('性质', ''))
+        if '买' in nature:
+            return amt
+        elif '卖' in nature:
+            return -amt
+        return 0
+    
+    df_chart['净流入额'] = df_chart.apply(calc_net, axis=1)
+    df_chart['累计净流入'] = df_chart['净流入额'].cumsum()
+    
+    # A区：宏观趋势 (新增图表)
+    col_a1, col_a2 = st.columns(2)
+    
+    with col_a1:
+        st.markdown("**📈 全天累计资金流曲线**")
+        try:
+            cum_flow_fig = cg.create_cumulative_flow_chart(df_chart)
+            st.plotly_chart(cum_flow_fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"累计资金流曲线生成失败: {e}")
+    
+    with col_a2:
+        st.markdown("**🌡️ 日内分时资金流热力**")
+        try:
+            # 直接传入原始 df_chart，让热力图内部处理聚合
+            # （热力图需要 '成交额(元)' 来计算资金流比率）
+            heatmap_fig = cg.create_intraday_heatmap(df_chart, resample_minutes=10)
+            st.plotly_chart(heatmap_fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"热力图生成失败: {e}")
+    
+    st.markdown("---")
+    
+    # B区：微观明细 (原有图表优化)
+    st.subheader("🔍 资金流向深度分析")
     col_l, col_r = st.columns(2)
     
-    waterfall_fig = cg.create_flow_waterfall(analysis.get('flows', {}))
+    # 使用堆叠面积图替代瀑布图
+    stacked_area_fig = cg.create_stacked_area_flow(df, analysis.get('flows', {}), resample_minutes=30)
     strength_fig = cg.create_order_strength_chart(analysis.get('strength_timeseries', pd.DataFrame()))
     
     with col_l:
-        st.plotly_chart(waterfall_fig, use_container_width=True)
+        st.markdown("**💼 主力/散户资金流构成 (30分钟)**")
+        st.plotly_chart(stacked_area_fig, use_container_width=True)
+        
+        # 显示汇总数据
+        flows = analysis.get('flows', {})
+        st.info(f"""
+        **主力净流入**: ¥{flows.get('large_order_net_inflow', 0):,.0f}  
+        **散户净流入**: ¥{flows.get('retail_net_inflow', 0):,.0f}
+        """)
+        
     with col_r:
+        st.markdown("**⚖️ 买卖盘力度对比**")
         st.plotly_chart(strength_fig, use_container_width=True)
         
     st.markdown("---")

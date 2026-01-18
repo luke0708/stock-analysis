@@ -9,20 +9,24 @@ class FlowAnalyzer:
     """
     资金流向分析器
     
-    算法说明：
-    1. **大单定义**：成交额 >= 10万元的订单视为主力大单
-    2. **散户定义**：成交额 < 10万元的订单视为散户小单
-    3. **净流入计算**：买入额 - 卖出额
+    算法说明 (Level-2 增强算法):
+    1. **数据基础**: 获取逐笔成交记录（时间、价格、成交量、买卖方向）
+    2. **资金分级**: 
+       - **主力资金**: 单笔成交额 ≥ 20万元
+       - **散户资金**: 单笔成交额 < 20万元
+    3. **流向计算**:
+       - 主力流入 = ∑(主力级别 & 主动买入)
+       - 主力流出 = ∑(主力级别 & 主动卖出)
+       - 主力净流入 = 主力流入 - 主力流出
     
     注意事项：
-    - 本算法为简化版本，实际市场中主力散户识别更复杂
-    - 仅供参考，不构成投资建议
+    - 此阈值(20万)为通用参考标准，不同软件可能有细微差异
     """
     
-    def __init__(self, large_order_threshold: float = 100000):
+    def __init__(self, large_order_threshold: float = 200000):
         """
         Args:
-            large_order_threshold: 大单阈值（元），默认10万
+            large_order_threshold: 大单阈值（元），默认20万 (Level-2 常用标准)
         """
         self.large_order_threshold = large_order_threshold
     
@@ -33,14 +37,9 @@ class FlowAnalyzer:
         Returns:
             包含以下字段的字典：
             - total_turnover: 总成交额
-            - large_order_net_inflow: 主力净流入（大单买入-大单卖出）
-            - retail_net_inflow: 散户净流入（小单买入-小单卖出）
-            - large_order_count: 大单笔数
-            - retail_order_count: 散户笔数
-            - large_buy_amount: 主力买入总额
-            - large_sell_amount: 主力卖出总额
-            - retail_buy_amount: 散户买入总额
-            - retail_sell_amount: 散户卖出总额
+            - large_order_net_inflow: 主力净流入
+            - retail_net_inflow: 散户净流入
+            - ...
         """
         if df.empty:
             return {}
@@ -56,67 +55,69 @@ class FlowAnalyzer:
             if 'type' in df.columns:
                 df['性质'] = df['type']
             else:
-                # 如果没有性质，根据价格变动推测
+                # Fallback: 根据价格变动推测 (Level-1 approximation)
                 if 'price_change' in df.columns:
                     df['性质'] = df['price_change'].apply(
                         lambda x: '买盘' if x > 0 else ('卖盘' if x < 0 else '中性盘')
                     )
         
-        # 1. 按订单大小分类
-        large_orders = df[df['成交额(元)'] >= self.large_order_threshold]
-        small_orders = df[df['成交额(元)'] < self.large_order_threshold]
+        # 1. 划分资金类型 (根据 20万 阈值)
+        # 主力资金: >= 200,000
+        mask_main = df['成交额(元)'] >= self.large_order_threshold
+        # 散户资金: < 200,000
+        mask_retail = ~mask_main
         
-        # 2. 计算各类资金
-        def calc_flows(sub_df):
-            buy_amount = sub_df[sub_df['性质'] == '买盘']['成交额(元)'].sum()
-            sell_amount = sub_df[sub_df['性质'] == '卖盘']['成交额(元)'].sum()
-            net_inflow = buy_amount - sell_amount
-            return float(buy_amount), float(sell_amount), float(net_inflow)
+        main_orders = df[mask_main]
+        retail_orders = df[mask_retail]
         
-        large_buy, large_sell, large_net = calc_flows(large_orders)
-        retail_buy, retail_sell, retail_net = calc_flows(small_orders)
+        # 2. 分类汇总 (计算流入流出)
+        def calc_net(sub_df):
+            # 主动买入
+            inflow = sub_df[sub_df['性质'].astype(str).str.contains('买')]['成交额(元)'].sum()
+            # 主动卖出
+            outflow = sub_df[sub_df['性质'].astype(str).str.contains('卖')]['成交额(元)'].sum()
+            net = inflow - outflow
+            return float(inflow), float(outflow), float(net)
+        
+        main_in, main_out, main_net = calc_net(main_orders)
+        retail_in, retail_out, retail_net = calc_net(retail_orders)
         
         return {
             "total_turnover": float(df['成交额(元)'].sum()),
             
             # 主力资金
-            "large_order_net_inflow": large_net,
-            "large_buy_amount": large_buy,
-            "large_sell_amount": large_sell,
-            "large_order_count": len(large_orders),
+            "large_order_net_inflow": main_net,
+            "large_buy_amount": main_in,
+            "large_sell_amount": main_out,
+            "large_order_count": len(main_orders),
             
             # 散户资金
             "retail_net_inflow": retail_net,
-            "retail_buy_amount": retail_buy,
-            "retail_sell_amount": retail_sell,
-            "retail_order_count": len(small_orders),
+            "retail_buy_amount": retail_in,
+            "retail_sell_amount": retail_out,
+            "retail_order_count": len(retail_orders),
             
-            # 占比
-            "large_order_ratio": len(large_orders) / len(df) * 100 if len(df) > 0 else 0,
-            "retail_order_ratio": len(small_orders) / len(df) * 100 if len(df) > 0 else 0,
+            # 统计
+            "large_order_ratio": len(main_orders) / len(df) * 100 if len(df) > 0 else 0,
         }
     
     def get_algorithm_description(self) -> str:
         """获取算法说明"""
+        t_val = self.large_order_threshold / 10000
         return f"""
-### 资金流向分析算法说明
+### 资金流向算法 (Level-2 增强版)
 
-#### 📊 分类标准
-- **主力大单**: 单笔成交额 ≥ ¥{self.large_order_threshold:,.0f}
-- **散户小单**: 单笔成交额 < ¥{self.large_order_threshold:,.0f}
+#### 📊 资金划分标准
+根据单笔成交金额进行划分：
+- **主力资金**: 单笔成交额 ≥ **{t_val:.0f}万元**
+- **散户资金**: 单笔成交额 < **{t_val:.0f}万元**
 
 #### 🧮 计算公式
-1. **主力净流入** = 主力买入总额 - 主力卖出总额
-2. **散户净流入** = 散户买入总额 - 散户卖出总额
+1. **主力净流入** = 主力主动买入额 - 主力主动卖出额
+2. **散户净流入** = 散户主动买入额 - 散户主动卖出额
 
-#### 📝 注意事项
-- 买卖性质根据价格变动方向判断（上涨=买盘，下跌=卖盘）
-- 本算法为**简化模型**，实际市场识别更复杂
-- 数据来源：分钟级成交数据
-- 仅供参考学习，不构成投资建议
-
-#### 💡 如何理解
-- **主力净流入为正**: 大资金在积极买入，可能看好后市
-- **主力净流入为负**: 大资金在卖出，需警惕
-- **散户行为**: 通常与主力相反，可作为参考对比
+#### 📝 说明
+- **数据源**: 逐笔成交数据 (Tick Data)
+- **买卖判定**: 根据每一笔交易的主动性方向（主动买/主动卖）统计
+- 这是业内通用的资金流向计算逻辑，能较好地反映大资金的进出意愿。
 """

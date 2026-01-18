@@ -42,7 +42,18 @@ class StockListProvider:
                 
         # 重新获取
         try:
-            df = ak.stock_zh_a_spot_em()
+            # 优化：使用更轻量的接口获取列表 (仅代码和名称)
+            # stock_info_a_code_name 比 stock_zh_a_spot_em 快很多
+            try:
+                df = ak.stock_info_a_code_name()
+            except:
+                # Fallback to full spot if code_name fails
+                df = ak.stock_zh_a_spot_em()
+            
+            # 确保列名一致
+            if 'code' in df.columns:
+                df = df.rename(columns={'code': '代码', 'name': '名称'})
+            
             # 只保留需要的列
             if '代码' in df.columns and '名称' in df.columns:
                 df = df[['代码', '名称']]

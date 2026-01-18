@@ -13,7 +13,7 @@ class DragonTigerAnalyzer:
     @staticmethod
     def get_recent_lhb(days=3) -> pd.DataFrame:
         """
-        获取最近N天的龙虎榜数据
+        获取最近N天的龙虎榜数据 (EastMoney Direct API)
         
         Args:
             days: 获取最近几天的数据
@@ -21,17 +21,86 @@ class DragonTigerAnalyzer:
         Returns:
             DataFrame包含龙虎榜记录
         """
+        # 尝试使用直连 API 获取最近数据
+        # 直连API通常只支持特定参数，这里模拟抓取最新一期
+        try:
+            import requests
+            import time
+            from datetime import datetime
+            
+            # EastMoney API (DataCenter)
+            # URL: https://datacenter-web.eastmoney.com/api/data/v1/get
+            # Params: reportName=RPT_DAILYBILLBOARD_DETAILS, columns=ALL, sortColumns=TRADE_DATE, -1 (desc)
+            
+            url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+            params = {
+                "reportName": "RPT_DAILYBILLBOARD_DETAILS",
+                "columns": "ALL",
+                "source": "WEB",
+                "sortColumns": "TRADE_DATE,SECURITY_CODE",
+                "sortTypes": "-1,1",
+                "pageSize": "50", # Fetch more
+                "pageNumber": "1",
+                "_": str(int(time.time()*1000))
+            }
+            # 如果指定了日期过滤，可以加 filter 参数，但这里获取最近N条更简单
+            headers = {
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://data.eastmoney.com/"
+            }
+            
+            resp = requests.get(url, params=params, headers=headers, timeout=3)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get('success'):
+                    rows = data.get('result', {}).get('data', [])
+                    
+                    # Convert to DataFrame
+                    df = pd.DataFrame(rows)
+                    if not df.empty:
+                        # 映射列名以匹配 AkShare 格式 (方便下游兼容)
+                        # AkShare: 序号, 代码, 名称, 涨跌幅, 收盘价, 换手率, 龙虎榜净买额, 市场总成交额, 净买额占总成交比, 成交额, 流通市值, 上榜原因, 上榜日
+                        # API: SECURITY_CODE, SECURITY_NAME_ABBR, CHANGE_RATE, CLOSE_PRICE, TURNOVERRATE, NET_BUY_AMT, AMOUNT, EXPLANATION, TRADE_DATE
+                        
+                        rename_map = {
+                            'SECURITY_CODE': '代码',
+                            'SECURITY_NAME_ABBR': '名称',
+                            'CHANGE_RATE': '涨跌幅',
+                            'CLOSE_PRICE': '收盘价',
+                            'NET_BUY_AMT': '净买额', # AkShare uses '龙虎榜净买额'? Let's check.
+                            'AMOUNT': '成交额',
+                            'EXPLANATION': '上榜原因',
+                            'TRADE_DATE': '上榜日',
+                            # 补充字段
+                            'BUY_AMT': '买入额',
+                            'SELL_AMT': '卖出额'
+                        }
+                        df = df.rename(columns=rename_map)
+                        # 格式化日期
+                        df['上榜日'] = pd.to_datetime(df['上榜日']).dt.strftime('%Y-%m-%d')
+                        
+                        # 过滤最近几天
+                        cutoff_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+                        df = df[df['上榜日'] >= cutoff_date]
+                        
+                        return df
+            
+            # Fallback
+            return DragonTigerAnalyzer._fetch_akshare_lhb(days)
+        except Exception as e:
+            print(f"Direct LHB API failed: {e}")
+            return DragonTigerAnalyzer._fetch_akshare_lhb(days)
+
+    @staticmethod
+    def _fetch_akshare_lhb(days):
+        """Fallback to AkShare"""
         try:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days)
-            
             start_str = start_date.strftime("%Y%m%d")
             end_str = end_date.strftime("%Y%m%d")
-            
-            df = ak.stock_lhb_detail_em(start_date=start_str, end_date=end_str)
-            return df
-        except Exception as e:
-            print(f"获取龙虎榜失败: {e}")
+            return ak.stock_lhb_detail_em(start_date=start_str, end_date=end_str)
+        except:
             return pd.DataFrame()
     
     @staticmethod
