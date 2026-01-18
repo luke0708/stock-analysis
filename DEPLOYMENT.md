@@ -110,3 +110,19 @@ docker run -p 8501:8501 stock-analysis
 - GUI 启动：`./启动分析系统.command`
 - CLI 启动：`streamlit run stock_analysis/ui/unified_app.py`
 - 备用入口：`python run.py`
+
+
+## 6. 常见问题 (FAQ)
+
+### 6.1 为什么云端版本比本地慢？
+Streamlit Cloud 的服务器位于美国（或欧洲），而 A 股数据（AkShare/Tushare）的服务器位于中国国内。
+每次请求都需要跨越太平洋并经过防火墙（GFW），这会产生较高的**网络延迟 (Latency)**。
+- **本地运行**: 直连国内数据源，速度取决于您的网速。
+- **云端运行**: 美国服务器 -> 跨海 -> 国内数据源 -> 跨海 -> 美国服务器 -> 渲染页面。
+
+**优化建议**:
+- 系统内置了缓存机制，第一次查询由于没有缓存会比较慢，**第二次查询相同数据会立刻显示**。
+- 建议优先查看已分析过的股票。
+
+#云端部署地址
+https://stock-analysis-luke.streamlit.app/
