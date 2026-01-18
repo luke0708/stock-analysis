@@ -1,71 +1,69 @@
-# 📈 A股资金流向智能分析系统 (Stock Flow Analysis)
+# A股资金流向智能分析系统 (Stock Flow Analysis)
 
-一个基于 Streamlit 的现代化股票分析平台，专注于资金流向的可视化分析。整合 AkShare 和 Tushare 双数据源，提供个股资金博弈、即时热点追踪及多股对比分析功能。
+一个基于 Streamlit 的股票分析平台，聚焦资金流向与盘中节奏。默认使用 AkShare，支持可选的 Tushare 与全球市场数据源，并内置 AI 智能解读。
 
 ![Version](https://img.shields.io/badge/version-2.2-blue) ![Python](https://img.shields.io/badge/python-3.9%2B-green) ![License](https://img.shields.io/badge/license-MIT-orange)
 
 ---
 
-## ✨ 核心功能
+## 核心能力
 
-- **📊 个股全景分析**: 累计资金流、日内热力图、买卖力道分析。
-- **🔥 市场热点追踪**: 实时板块排行、涨停板分析、龙虎榜追踪。
-- **⚖️ 多股对比 (Pro)**: 双股票走势叠加与资金流同步对比。
-- **🛠 专业工具箱**: 本地自选股、CSV导入导出、智能缓存管理。
+- 个股资金流向：净流入、热力图、主力/散户结构、异动追踪。
+- 市场全景：板块热点、龙虎榜、市场情绪与资讯。
+- 多股对比：双股票走势与资金流对照。
+- 实时预警：多股监控、连续触发、交易时段自动暂停。
+- 全球市场：A 股指数 + 美股/港股（YFinance）。
+- AI 智能投顾：结构化解读 + 可选新闻补充 + 追问。
+- 自选股：本地收藏常用标的。
 
-## 📚 文档索引
+## 快速开始
 
-本项目的文档结构已经过整理，请查阅以下指南：
-
-| 文档名称 | 内容说明 |
-| :--- | :--- |
-| **[📘 用户手册 (User Manual)](USER_MANUAL.md)** | **强烈推荐阅读**。包含从入门到精通的所有使用方法、图表算法原理及常见问题。 |
-| **[🚀 部署指南 (Deployment)](DEPLOYMENT_GUIDE.md)** | 包含本地运行、Streamlit Cloud 云端部署、Docker 及服务器部署教程。 |
-| **[🗺️ 开发路线图 (Roadmap)](ROADMAP.md)** | 项目的近期计划（历史回测、AI分析）与长期规划。 |
-
-## 🏎️ 快速开始
-
-### 1. 环境准备
-确保已安装 Python 3.9+ 和 Git。
-
-### 2. 安装运行
 ```bash
-# 克隆项目
-git clone <your-repo-url>
+# 进入项目
 cd 读取股票当天数据
 
-# 安装依赖
+# 安装依赖（请使用本地 venv）
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 
-# 启动系统 (Mac/Linux)
+# 启动系统（macOS 推荐）
 ./启动分析系统.command
 
-# 或者通用启动命令
+# 或使用命令行启动
 streamlit run stock_analysis/ui/unified_app.py
 ```
 
-## 🔐 数据源配置
+浏览器打开 `http://localhost:8501`。
 
-本系统开箱即用（默认 AkShare）。如需更高质量数据，推荐配置 **Tushare Pro**：
-1. 注册 [Tushare Pro](https://tushare.pro/register) 获取 Token。
-2. 在项目根目录创建 `.env` 文件：`TUSHARE_TOKEN=your_token`。
-3. 详见 [用户手册 - 数据源配置](USER_MANUAL.md#5-数据源配置-tushare)。
+## 数据源与密钥
 
----
+- 默认数据源：AkShare（免注册）。
+- 可选：Tushare（更稳定），在 `.env` 中配置 `TUSHARE_TOKEN=...`。
+- AI 解读：在 `.env` 中配置 `DEEPSEEK_API_KEY=...`。
 
-## 🏗️ 项目结构
+## 文档索引
+
+| 文档名称 | 内容说明 |
+| :--- | :--- |
+| [用户手册](USER_MANUAL.md) | 面向最终用户的使用说明与页面导航。 |
+| [部署手册](DEPLOYMENT.md) | 本地/云端运行与运维说明。 |
+| [开发交接](DEV_HANDOVER.md) | 面向开发者的结构、入口与技术债。 |
+| [规划路线](ROADMAP.md) | 产品优先级与迭代计划。 |
+
+## 项目结构
 
 ```
 stock_analysis/
-├── analysis/       # 核心分析逻辑 (资金流、指标、异常检测)
-├── data/           # 数据层 (AkShare/Tushare 提供者、清洗器)
-├── ui/             # 界面层 (Streamlit 页面、组件)
-├── visualization/  # 可视化层 (Plotly 图表生成器)
-└── core/           # 基础设施 (配置、缓存、存储)
+├── analysis/       # 核心分析逻辑
+├── data/           # 数据源与清洗
+├── ui/             # Streamlit 页面
+├── visualization/  # 图表生成
+└── core/           # 缓存与基础设施
 ```
 
-## 🤝 贡献与反馈
+## 贡献与反馈
 
-欢迎提交 Issue 或 PR。新功能建议请参考 [Roadmap](ROADMAP.md)。
+欢迎提交 Issue 或 PR。建议先阅读 `DEV_HANDOVER.md`。
 
 License: MIT

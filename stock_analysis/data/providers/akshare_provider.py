@@ -1,6 +1,6 @@
 import akshare as ak
 import pandas as pd
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 from .base import StockDataProvider
 
@@ -50,7 +50,34 @@ class AkShareProvider(StockDataProvider):
                 return pd.DataFrame()
             print(f"Fallback: Switching target date to last trading day: {target_date}")
             
-        return self._fetch_historical_tick(code, target_date)
+        df = self._fetch_historical_tick(code, target_date)
+        if df.empty:
+            fallback_date = self._get_last_trading_day_before(code, target_date)
+            if fallback_date and fallback_date != target_date:
+                print(f"Fallback: Switching target date to last trading day: {fallback_date}")
+                df = self._fetch_historical_tick(code, fallback_date)
+                if not df.empty:
+                    df.attrs['requested_date'] = target_date
+                    df.attrs['actual_date'] = fallback_date
+                    df.attrs['fallback_reason'] = "previous_trading_day"
+                    return df
+
+            latest_date = self._get_last_trading_day(code)
+            if latest_date and latest_date not in {target_date, fallback_date}:
+                print(f"Fallback: Switching target date to latest trading day: {latest_date}")
+                df_latest = self._fetch_historical_tick(code, latest_date)
+                if not df_latest.empty:
+                    df_latest.attrs['requested_date'] = target_date
+                    df_latest.attrs['actual_date'] = latest_date
+                    df_latest.attrs['fallback_reason'] = "latest_available"
+                    return df_latest
+
+            empty_df = pd.DataFrame()
+            empty_df.attrs['requested_date'] = target_date
+            empty_df.attrs['fallback_date'] = fallback_date
+            empty_df.attrs['fallback_failed'] = True
+            return empty_df
+        return df
 
     def _get_last_trading_day(self, code: str) -> Optional[str]:
         try:
@@ -62,6 +89,33 @@ class AkShareProvider(StockDataProvider):
              return last_date
         except Exception as e:
             print(f"Error finding last trading day: {e}")
+            return None
+
+    def _get_last_trading_day_before(self, code: str, date_str: str) -> Optional[str]:
+        try:
+            target_date = datetime.strptime(date_str, "%Y%m%d").date()
+            start_date = (target_date - timedelta(days=30)).strftime("%Y%m%d")
+            end_date = target_date.strftime("%Y%m%d")
+
+            daily_df = ak.stock_zh_a_hist(
+                symbol=code,
+                period="daily",
+                start_date=start_date,
+                adjust="qfq"
+            )
+            if daily_df.empty or '日期' not in daily_df.columns:
+                return None
+
+            daily_df['日期'] = pd.to_datetime(daily_df['日期'], errors='coerce')
+            daily_df = daily_df.dropna(subset=['日期']).sort_values('日期')
+            daily_df = daily_df[daily_df['日期'].dt.date <= target_date]
+            if daily_df.empty:
+                return None
+
+            last_date = daily_df.iloc[-1]['日期'].strftime("%Y%m%d")
+            return last_date
+        except Exception as e:
+            print(f"Error finding last trading day before {date_str}: {e}")
             return None
 
     def _fetch_historical_tick(self, code: str, date_str: str) -> pd.DataFrame:

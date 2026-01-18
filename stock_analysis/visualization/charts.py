@@ -221,6 +221,119 @@ class ChartGenerator:
         fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
         
         return fig
+
+    @staticmethod
+    def create_comparison_price_chart(
+        df_a: pd.DataFrame,
+        df_b: pd.DataFrame,
+        name_a: str,
+        name_b: str
+    ) -> go.Figure:
+        """
+        创建多股涨幅叠加对比图
+        """
+        def normalize_price(df: pd.DataFrame) -> pd.DataFrame:
+            df_copy = df.copy()
+            if '时间' not in df_copy.columns:
+                for time_col in ['成交时间', 'time', 'datetime', '时间戳']:
+                    if time_col in df_copy.columns:
+                        df_copy = df_copy.rename(columns={time_col: '时间'})
+                        break
+
+            if '时间' in df_copy.columns:
+                df_copy['时间'] = pd.to_datetime(df_copy['时间'], errors='coerce')
+                df_copy = df_copy.dropna(subset=['时间']).sort_values('时间')
+
+            price_col = None
+            for col in ['收盘', '成交价格', '价格', '最新价']:
+                if col in df_copy.columns:
+                    price_col = col
+                    break
+
+            base_col = '开盘' if '开盘' in df_copy.columns else price_col
+            if price_col is None or base_col is None or df_copy.empty:
+                return pd.DataFrame(columns=['时间', '涨幅'])
+
+            base_price = df_copy[base_col].iloc[0]
+            if base_price == 0:
+                df_copy['涨幅'] = 0.0
+            else:
+                df_copy['涨幅'] = (df_copy[price_col] - base_price) / base_price * 100
+
+            return df_copy[['时间', '涨幅']]
+
+        series_a = normalize_price(df_a)
+        series_b = normalize_price(df_b)
+
+        fig = go.Figure()
+        if not series_a.empty:
+            fig.add_trace(go.Scatter(
+                x=series_a['时间'],
+                y=series_a['涨幅'],
+                name=name_a,
+                line=dict(color='#ff4d4f', width=2)
+            ))
+        if not series_b.empty:
+            fig.add_trace(go.Scatter(
+                x=series_b['时间'],
+                y=series_b['涨幅'],
+                name=name_b,
+                line=dict(color='#1890ff', width=2)
+            ))
+
+        fig.update_layout(
+            title="日内涨幅走势叠加 (%)",
+            hovermode="x unified",
+            template="plotly_white"
+        )
+        fig.add_hline(y=0, line_dash="dash", line_color="gray")
+
+        return fig
+
+    @staticmethod
+    def create_comparison_flow_chart(
+        df_a: pd.DataFrame,
+        df_b: pd.DataFrame,
+        name_a: str,
+        name_b: str
+    ) -> go.Figure:
+        """
+        创建累计资金净流入对比图（双轴）
+        """
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+        if {'时间', '累计净流入'}.issubset(df_a.columns):
+            fig.add_trace(
+                go.Scatter(
+                    x=df_a['时间'],
+                    y=df_a['累计净流入'],
+                    name=f"{name_a} 资金流",
+                    line=dict(color='#ff4d4f')
+                ),
+                secondary_y=False
+            )
+
+        if {'时间', '累计净流入'}.issubset(df_b.columns):
+            fig.add_trace(
+                go.Scatter(
+                    x=df_b['时间'],
+                    y=df_b['累计净流入'],
+                    name=f"{name_b} 资金流",
+                    line=dict(color='#1890ff', dash='dot')
+                ),
+                secondary_y=True
+            )
+
+        fig.update_layout(
+            title="累计资金净流入对比 (双轴)",
+            hovermode="x unified",
+            template="plotly_white",
+            legend=dict(orientation="h", y=1.1)
+        )
+        fig.update_yaxes(title_text=f"{name_a} (元)", secondary_y=False, title_font=dict(color="#ff4d4f"))
+        fig.update_yaxes(title_text=f"{name_b} (元)", secondary_y=True, title_font=dict(color="#1890ff"))
+
+        return fig
     
     @staticmethod
     def create_large_orders_scatter(large_orders: List[Dict], df: pd.DataFrame) -> go.Figure:

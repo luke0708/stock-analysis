@@ -1,5 +1,5 @@
 """
-A股资金流向智能分析系统 - 统一入口 (v2.0)
+A股资金流向智能分析系统 - 统一入口 (v2.2)
 整合个股分析、市场仪表盘、自选股管理等功能
 """
 import sys
@@ -16,10 +16,12 @@ from stock_analysis.ui.market_page import show_market_page
 from stock_analysis.ui.watchlist_page import show_watchlist_page
 from stock_analysis.ui.future_features import (
     show_backtesting,
-    show_global_markets,
     show_ai_analysis
 )
+from stock_analysis.ui.global_markets_page import show_global_markets
 from stock_analysis.ui.comparison_page import show_comparison_page
+from stock_analysis.ui.alert_page import show_alert_page
+from stock_analysis.core.prefetch import start_market_prefetch
 
 # 页面配置 (必须在所有其他 streamlit 命令之前)
 st.set_page_config(
@@ -30,8 +32,10 @@ st.set_page_config(
 )
 
 def main():
-    # 1. 应用全局样式 (v2.0 机构暗黑风)
+    # 1. 应用全局样式 (v2.2 机构暗黑风)
     apply_global_styles()
+
+    start_market_prefetch()
     
     # 2. 处理页面跳转
     if '_navigate_to' in st.session_state:
@@ -45,9 +49,15 @@ def main():
         st.write("") # Spacer
         
         # 导航菜单 - 分组式
+        menu_options = ["📊 市场全景", "🔍 智能分析", "🧪 策略回测", "⚙️ 系统管理"]
+        default_menu = st.session_state.get("menu_category", "🔍 智能分析")
+        if default_menu not in menu_options:
+            default_menu = "🔍 智能分析"
         menu_category = st.radio(
             "导航区域",
-            ["📊 市场全景", "🔍 智能分析", "🧪 策略回测", "⚙️ 系统管理"],
+            menu_options,
+            index=menu_options.index(default_menu),
+            key="menu_category",
             label_visibility="collapsed"
         )
         
@@ -59,14 +69,26 @@ def main():
             selected_sub_page = st.radio(
                 "市场模块",
                 ["🚀 仪表盘 (Dashboard)", "🔥 深度热点 & 龙虎榜", "🌍 全球市场 (Pro)"],
-                index=0
+                index=0,
+                key="market_sub_page"
             )
             
         elif menu_category == "🔍 智能分析":
+            analysis_options = [
+                "📈 个股资金流向",
+                "🔔 实时预警",
+                "📋 我的自选股",
+                "⚖️ 多股对比 (Pro)",
+                "🤖 AI 投顾 (Pro)"
+            ]
+            default_analysis = st.session_state.get("analysis_sub_page", "📈 个股资金流向")
+            if default_analysis not in analysis_options:
+                default_analysis = "📈 个股资金流向"
             selected_sub_page = st.radio(
                 "分析模块",
-                ["📈 个股资金流向", "📋 我的自选股", "⚖️ 多股对比 (Pro)", "🤖 AI 投顾 (Pro)"],
-                index=0
+                analysis_options,
+                index=analysis_options.index(default_analysis),
+                key="analysis_sub_page"
             )
             
         elif menu_category == "🧪 策略回测":
@@ -89,6 +111,8 @@ def main():
         if target == "📈 个股分析":
             menu_category = "🔍 智能分析"
             selected_sub_page = "📈 个股资金流向"
+            st.session_state.menu_category = menu_category
+            st.session_state.analysis_sub_page = selected_sub_page
         del st.session_state['_navigate_to']
             
     # 路由分发
@@ -103,6 +127,9 @@ def main():
         
     elif selected_sub_page == "📈 个股资金流向":
         show_analysis_page()
+        
+    elif selected_sub_page == "🔔 实时预警":
+        show_alert_page()
         
     elif selected_sub_page == "📋 我的自选股":
         show_watchlist_page()

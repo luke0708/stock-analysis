@@ -106,6 +106,109 @@ def apply_global_styles():
         border: 1px solid #e0e0e0;
         color: #333333;
     }
+
+    /* 板块资金流向榜单 */
+    .flow-panel {
+        background: #ffffff;
+        border: 1px solid #e6e6e6;
+        border-radius: 12px;
+        padding: 16px 18px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+    .flow-row {
+        display: grid;
+        grid-template-columns: 28px 1fr 160px 72px;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 0;
+    }
+    .flow-rank {
+        width: 24px;
+        height: 24px;
+        border-radius: 999px;
+        background: #f0f2f5;
+        color: #444444;
+        font-size: 12px;
+        text-align: center;
+        line-height: 24px;
+        font-weight: 600;
+    }
+    .flow-name {
+        font-weight: 600;
+        color: #1a1a2e;
+    }
+    .flow-bar {
+        height: 8px;
+        background: #f3f4f6;
+        border-radius: 999px;
+        overflow: hidden;
+    }
+    .flow-bar span {
+        display: block;
+        height: 100%;
+        border-radius: 999px;
+    }
+    .flow-pct {
+        text-align: right;
+        font-weight: 600;
+        font-family: 'SF Mono', 'Menlo', monospace;
+    }
+    .flow-meta {
+        margin-left: 38px;
+        color: #6b7280;
+        font-size: 12px;
+        padding-bottom: 4px;
+    }
+
+    /* 指数看板 */
+    .index-panel {
+        background: linear-gradient(135deg, #ffffff 0%, #f6f7fb 100%);
+        border: 1px solid #e6e6e6;
+        border-radius: 14px;
+        padding: 16px 18px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    }
+    .index-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #4b5563;
+        margin-bottom: 6px;
+    }
+    .index-price {
+        font-size: 28px;
+        font-weight: 700;
+        color: #111827;
+        font-family: 'SF Mono', 'Menlo', monospace;
+        line-height: 1.2;
+    }
+    .index-change {
+        font-size: 13px;
+        font-weight: 600;
+        margin-top: 4px;
+    }
+    .index-range {
+        height: 8px;
+        background: #e5e7eb;
+        border-radius: 999px;
+        overflow: hidden;
+        margin: 10px 0 8px;
+    }
+    .index-range span {
+        display: block;
+        height: 100%;
+        border-radius: 999px;
+    }
+    .index-meta {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px 12px;
+        font-size: 12px;
+        color: #6b7280;
+    }
+    .index-meta b {
+        color: #374151;
+        font-weight: 600;
+    }
     </style>
     """
     

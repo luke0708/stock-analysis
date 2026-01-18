@@ -55,7 +55,7 @@ class DataCleaner:
             price_cols = ['开盘', '收盘', '最高', '最低', '均价']
             for col in price_cols:
                 if col in df.columns:
-                    df[col] = df[col].fillna(method='ffill').fillna(method='bfill')
+                    df[col] = df[col].ffill().bfill()
             
             # 成交量和成交额填0
             volume_cols = ['成交量', '成交额', '成交额(元)']

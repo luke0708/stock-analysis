@@ -1,123 +1,66 @@
-# 👨‍💻 开发者交接文档 (Developer Handover)
+# 开发者交接文档 (DEV_HANDOVER)
 
-本文档专为 **后续接手的开发者或 AI 助手** 设计。它不关注"怎么用"，而是聚焦"**怎么写**"和"**目前状态**"。
+本文档面向开发者/AI 助手，关注“怎么改”和“当前状态”。
 
-## 🏗️ 1. 系统架构与核心逻辑
+## 1. 架构与数据流
 
-### 整体架构 (MVC Pattern)
-系统严格遵循 **Data - Analysis - UI** 分层架构：
+### 分层结构
+- **Data**：`stock_analysis/data/` 数据源与清洗。
+- **Analysis**：`stock_analysis/analysis/` 指标、资金流、异常检测与 AI 客户端。
+- **UI**：`stock_analysis/ui/` Streamlit 页面入口与交互。
+- **Visualization**：`stock_analysis/visualization/` Plotly 图表生成。
 
-```mermaid
-graph TD
-    User[用户] --> UI[Streamlit UI 层]
-    UI --> Analysis[分析层 (Analyzer)]
-    Analysis --> Data[数据层 (Provider)]
-    Data --> APIs[外部接口 (AkShare/Tushare)]
-    
-    subgraph UI层
-    UnifiedApp --> Dashboard
-    UnifiedApp --> AnalysisPage
-    AnalysisPage --> Charts[Plotly图表]
-    end
-    
-    subgraph 分析层
-    FlowAnalyzer[资金流向]
-    IndicatorCalculator[技术指标]
-    AnomalyDetector[异动检测]
-    end
-    
-    subgraph 数据层
-    DataProvider[统一接口]
-    CacheManager[缓存管理]
-    DataCleaner[清洗与修复]
-    end
-```
+### 核心数据流
+1. UI 触发获取数据（AkShare/Tushare/YFinance）。
+2. `DataCleaner` 统一清洗与标准化。
+3. `FlowAnalyzer` 计算资金流向 + `flow_quality`。
+4. `AnomalyDetector` 识别大单/价格跳跃/量能异常。
+5. `ChartGenerator` 渲染图表，Streamlit 输出。
 
-### 核心数据流 (Data Flow)
-1.  **Request**: 用户在 `AnalysisPage` 输入代码 + 日期。
-2.  **Fetch**: `AkShareProvider.get_tick_data()` 获取原始分钟K线。
-3.  **Clean**: `DataCleaner` 修复缺失值、转换类型 (str -> float)。
-4.  **Analyze**:
-    *   `FlowAnalyzer`: 分类主力/散户，计算净流入。
-    *   `TimeSeriesAnalyzer`: 计算 VWAP, MA, RSI。
-5.  **Visualize**: `ChartGenerator` 接收清洗后的 DataFrame，生成 Plotly Figure。
-6.  **Render**: Streamlit `st.plotly_chart()` 渲染到前端。
+## 2. 运行入口与约定
 
-### 📂 项目目录结构 (Project Structure)
-以下是项目的标准目录结构，非此结构的文件通常为临时脚本：
+- GUI 启动：`启动分析系统.command`
+- CLI 启动：`streamlit run stock_analysis/ui/unified_app.py`
+- 备用入口：`python run.py`
 
-```
-stock_analysis/
-├── analysis/           # 核心业务逻辑
-│   ├── flows.py        # 资金流向算法
-│   ├── market_hotspot.py # 市场热点/龙虎榜
-│   └── ...
-├── core/               # 基础设施
-│   ├── config.py       # 全局配置
-│   ├── cache_manager.py # 缓存管理
-│   └── help_text.py    # 文案管理
-├── data/               # 数据层
-│   ├── providers/      # AkShare/Tushare 接口
-│   └── cleaner.py      # 数据清洗
-├── ui/                 # 界面层
-│   ├── unified_app.py  # 主入口
-│   ├── analysis_page.py # 个股分析页
-│   ├── comparison_page.py # 对比分析页
-│   └── ...
-└── visualization/      # 绘图层
-    └── charts.py       # Plotly 图表生成
-```
+环境变量（`.env`）：
+- `TUSHARE_TOKEN`：可选高质量数据源
+- `DEEPSEEK_API_KEY`：AI 智能投顾
 
----
+## 3. 关键文件索引
 
-## 📂 2. 关键文件索引 (Key Files)
+| 模块 | 文件路径 | 说明 |
+| :--- | :--- | :--- |
+| 入口 | `stock_analysis/ui/unified_app.py` | 导航与页面路由 |
+| 个股分析 | `stock_analysis/ui/analysis_page.py` | 核心页面与图表组合 |
+| 多股对比 | `stock_analysis/ui/comparison_page.py` | FlowAnalyzer + 对比图表 |
+| 实时预警 | `stock_analysis/ui/alert_page.py` | 自动刷新与交易时段控制 |
+| 全球市场 | `stock_analysis/ui/global_markets_page.py` | YFinance + A 股指数 |
+| AI 智能投顾 | `stock_analysis/ui/future_features.py` | DeepSeek 调用、新闻补充、追问 |
+| 资金流 | `stock_analysis/analysis/flows.py` | 资金流算法与粒度识别 |
+| 异动检测 | `stock_analysis/analysis/anomaly.py` | 动态阈值大单与波动 |
+| 图表 | `stock_analysis/visualization/charts.py` | Plotly 图表生成 |
+| 数据清洗 | `stock_analysis/data/cleaner.py` | 缺失值与异常修复 |
+| 预加载 | `stock_analysis/core/prefetch.py` | 市场页后台预取 |
 
-接手开发前，请务必熟悉以下核心文件：
+## 4. 当前状态
 
-| 模块 | 文件路径 | 职责说明 | 修改频率 |
-| :--- | :--- | :--- | :--- |
-| **入口** | `stock_analysis/ui/unified_app.py` | 程序主入口，负责导航路由 (替代旧的 `app.py`) | ⭐️⭐️ |
-| **页面** | `stock_analysis/ui/analysis_page.py` | 核心个股分析页，UI 逻辑最复杂 | ⭐️⭐️⭐️⭐️⭐️ |
-| **数据** | `stock_analysis/data/providers/akshare_provider.py` | AkShare 接口封装，最底层数据源 | ⭐️⭐️⭐️ |
-| **分析** | `stock_analysis/analysis/flows.py` | **资金流算法核心** (主力/散户划分逻辑) | ⭐️⭐️⭐️⭐️ |
-| **图表** | `stock_analysis/visualization/charts.py` | 所有 Plotly 图表生成逻辑 (热力图/曲线) | ⭐️⭐️⭐️⭐️⭐️ |
-| **配置** | `stock_analysis/core/config.py` | 全局配置 (路径、阈值、颜色) | ⭐️ |
+### 已稳定功能
+- 个股资金流向分析（回退最近交易日 + 实际日期显示）。
+- 多股对比：使用 FlowAnalyzer + 对比图表。
+- 市场全景：板块热点、龙虎榜、要闻、板块分析。
+- 全球市场：A 股指数 + 美股/港股（YFinance）。
+- 实时预警：多股监控、连续触发、交易时段自动暂停。
+- AI 智能投顾：结构化提示词 + 追问 + 可选新闻补充。
 
----
+### 已知技术债 / 风险点
+1. **Tick 数据缺失**：当前主要是分钟聚合数据，主力/散户划分为近似估算。
+2. **数据源稳定性**：AkShare 偶发超时，需更稳健的重试策略。
+3. **新闻覆盖**：个股新闻来自 AkShare，存在延迟或缺失。
+4. **性能**：市场热点/资讯加载速度仍受网络影响。
 
-## 🚦 3. 项目当前状态 (Status Snapshot)
+## 5. 下一步建议
 
-### ✅ 已稳固的功能 (Stable)
-*   [x] **双数据源引擎** (AkShare + Tushare) - 鲁棒性强
-*   [x] **资金流向图表** (累计流、热力图、堆叠图) - 算法已定型
-*   [x] **市场热点模块** (板块、龙虎榜) - 独立运行良好
-*   [x] **部署流程** (本地/云端) - 文档完备
-
-### 🚧 正在进行中 (WIP)
-*   [ ] **多股对比页** (`comparison_page.py`): UI 已基本完成，但资金流计算逻辑目前是简化的，需重构以复用 `FlowAnalyzer`。
-*   [ ] **图表交互**: 热力图尚未实现点击联动跳转（需 Streamlit Component 支持）。
-
-### ⚠️ 已知技术债 (Technical Debt)
-1.  **主力划分精度**: 目前依赖分钟级成交量估算 (1.5倍均量)。**必须**接入 Tick 数据才能实现精准的 20万/笔 划分。
-2.  **样式耦合**: 部分 CSS 样式直接写在 `dashboard.py` 中，应提取到 `styling.py`。
-3.  **异常处理**: AkShare 接口偶发超时，目前的重试机制较简单，需增强。
-
----
-
-## 🗺️ 4. 接手任务建议 (Next Steps)
-
-如果您是新接手的 AI 或开发者，建议按以下顺序开展工作：
-
-1.  **阅读 `USER_MANUAL.md` 中的图表算法章节**：理解业务逻辑。
-2.  **完成 P1 (多股对比)**：
-    *   在 `charts.py` 中新增 `create_comparison_chart()`。
-    *   完善 `comparison_page.py` 的数据处理逻辑。
-3.  **攻克 P2 (Tick 数据)**：
-    *   研究 `tushare.pro_tick` 接口。
-    *   重写 `FlowAnalyzer` 以支持 Tick 级逐笔计算。
-
----
-
-> **给 AI 的提示 (Prompt Tip)**:
-> 当你需要修改图表时，请优先读取 `charts.py` 和 `analysis_page.py`。
-> 当你需要修改数据源时，请务必检查 `akshare_provider.py` 和 `tushare_provider.py` 的差异。
+- 引入 Tick 数据源时，优先规范列名映射到 `FlowAnalyzer`。
+- 在 AI 侧继续强化“数据质量/来源”提示，减少误判。
+- 市场页进一步拆分耗时操作到按需加载或异步队列。

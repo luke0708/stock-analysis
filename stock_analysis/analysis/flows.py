@@ -4,6 +4,7 @@
 """
 import pandas as pd
 import numpy as np
+from typing import Optional, Tuple, Dict
 
 class FlowAnalyzer:
     """
@@ -29,6 +30,120 @@ class FlowAnalyzer:
             large_order_threshold: 大单阈值（元），默认20万 (Level-2 常用标准)
         """
         self.large_order_threshold = large_order_threshold
+
+    def _get_time_column(self, df: pd.DataFrame) -> Optional[str]:
+        for time_col in ['时间', '成交时间', 'time', 'datetime', '时间戳']:
+            if time_col in df.columns:
+                return time_col
+        return None
+
+    def _infer_granularity(self, df: pd.DataFrame) -> str:
+        time_col = self._get_time_column(df)
+        if time_col:
+            time_series = pd.to_datetime(df[time_col], errors='coerce').dropna().sort_values()
+            if len(time_series) >= 2:
+                deltas = time_series.diff().dt.total_seconds().dropna()
+                if not deltas.empty:
+                    median_sec = float(deltas.median())
+                    if median_sec >= 45:
+                        return "minute"
+                    if median_sec <= 5:
+                        return "tick"
+        row_count = len(df)
+        if row_count >= 1200:
+            return "tick"
+        if 100 <= row_count <= 400:
+            return "minute"
+        return "unknown"
+
+    def _normalize_flow_columns(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[str], Dict]:
+        df_copy = df.copy()
+        meta: Dict = {
+            "direction_source": "unknown",
+            "data_granularity": "unknown",
+        }
+
+        if '成交额(元)' not in df_copy.columns:
+            if 'amount' in df_copy.columns:
+                df_copy['成交额(元)'] = df_copy['amount']
+            elif '成交额' in df_copy.columns:
+                df_copy['成交额(元)'] = df_copy['成交额']
+            elif '成交金额' in df_copy.columns:
+                df_copy['成交额(元)'] = df_copy['成交金额']
+            else:
+                return df_copy, "Missing transaction amount data"
+
+        df_copy['成交额(元)'] = pd.to_numeric(df_copy['成交额(元)'], errors='coerce').fillna(0)
+
+        if '性质' not in df_copy.columns:
+            if 'type' in df_copy.columns:
+                df_copy['性质'] = df_copy['type']
+                meta["direction_source"] = "字段映射"
+            elif '买卖盘性质' in df_copy.columns:
+                df_copy['性质'] = df_copy['买卖盘性质']
+                meta["direction_source"] = "字段映射"
+            elif 'price_change' in df_copy.columns:
+                df_copy['性质'] = df_copy['price_change'].apply(
+                    lambda x: '买盘' if x > 0 else ('卖盘' if x < 0 else '中性盘')
+                )
+                meta["direction_source"] = "价格变化推断"
+            elif '收盘' in df_copy.columns:
+                df_copy['price_change'] = df_copy['收盘'].diff().fillna(0)
+                df_copy['性质'] = df_copy['price_change'].apply(
+                    lambda x: '买盘' if x > 0 else ('卖盘' if x < 0 else '中性盘')
+                )
+                meta["direction_source"] = "价格变化推断"
+            elif '成交价格' in df_copy.columns:
+                df_copy['price_change'] = df_copy['成交价格'].diff().fillna(0)
+                df_copy['性质'] = df_copy['price_change'].apply(
+                    lambda x: '买盘' if x > 0 else ('卖盘' if x < 0 else '中性盘')
+                )
+                meta["direction_source"] = "价格变化推断"
+            else:
+                df_copy['性质'] = '中性盘'
+                meta["direction_source"] = "默认中性"
+        else:
+            meta["direction_source"] = "原始买卖方向"
+
+        meta["data_granularity"] = self._infer_granularity(df_copy)
+        return df_copy, None, meta
+
+    def _get_large_order_threshold(self, df: pd.DataFrame, granularity: str) -> Tuple[float, str]:
+        if granularity == "minute":
+            quantile_threshold = float(df['成交额(元)'].quantile(0.9))
+            if np.isnan(quantile_threshold):
+                return self.large_order_threshold, "fixed_fallback"
+            return max(self.large_order_threshold, quantile_threshold), "quantile_90_or_fixed"
+        return self.large_order_threshold, "fixed"
+
+    def calculate_flow_series(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        生成逐笔净流入与累计净流入序列（用于图表对比）
+        """
+        if df.empty:
+            return df.copy()
+
+        df_flow, error, _meta = self._normalize_flow_columns(df)
+        if error:
+            return pd.DataFrame()
+
+        if '时间' not in df_flow.columns:
+            for time_col in ['成交时间', 'time', 'datetime', '时间戳']:
+                if time_col in df_flow.columns:
+                    df_flow = df_flow.rename(columns={time_col: '时间'})
+                    break
+
+        if '时间' in df_flow.columns:
+            df_flow['时间'] = pd.to_datetime(df_flow['时间'], errors='coerce')
+            df_flow = df_flow.dropna(subset=['时间']).sort_values('时间')
+
+        nature = df_flow['性质'].astype(str)
+        df_flow['净流入额'] = 0.0
+        df_flow.loc[nature.str.contains('买'), '净流入额'] = df_flow['成交额(元)']
+        df_flow.loc[nature.str.contains('卖'), '净流入额'] = -df_flow['成交额(元)']
+        df_flow['累计净流入'] = df_flow['净流入额'].cumsum()
+
+        return df_flow
     
     def calculate_flows(self, df: pd.DataFrame) -> dict:
         """
@@ -43,28 +158,18 @@ class FlowAnalyzer:
         """
         if df.empty:
             return {}
-        
-        # 确保有必要的列
-        if '成交额(元)' not in df.columns:
-            if 'amount' in df.columns:
-                df['成交额(元)'] = df['amount']
-            else:
-                return {"error": "Missing transaction amount data"}
-        
-        if '性质' not in df.columns:
-            if 'type' in df.columns:
-                df['性质'] = df['type']
-            else:
-                # Fallback: 根据价格变动推测 (Level-1 approximation)
-                if 'price_change' in df.columns:
-                    df['性质'] = df['price_change'].apply(
-                        lambda x: '买盘' if x > 0 else ('卖盘' if x < 0 else '中性盘')
-                    )
-        
-        # 1. 划分资金类型 (根据 20万 阈值)
-        # 主力资金: >= 200,000
-        mask_main = df['成交额(元)'] >= self.large_order_threshold
-        # 散户资金: < 200,000
+
+        df, error, meta = self._normalize_flow_columns(df)
+        if error:
+            return {"error": error}
+
+        granularity = meta.get("data_granularity", "unknown")
+        threshold, threshold_note = self._get_large_order_threshold(df, granularity)
+
+        # 1. 划分资金类型 (根据阈值)
+        # 主力资金: >= threshold
+        mask_main = df['成交额(元)'] >= threshold
+        # 散户资金: < threshold
         mask_retail = ~mask_main
         
         main_orders = df[mask_main]
@@ -81,7 +186,7 @@ class FlowAnalyzer:
         
         main_in, main_out, main_net = calc_net(main_orders)
         retail_in, retail_out, retail_net = calc_net(retail_orders)
-        
+
         return {
             "total_turnover": float(df['成交额(元)'].sum()),
             
@@ -99,6 +204,12 @@ class FlowAnalyzer:
             
             # 统计
             "large_order_ratio": len(main_orders) / len(df) * 100 if len(df) > 0 else 0,
+            "flow_quality": {
+                "direction_source": meta.get("direction_source", "unknown"),
+                "data_granularity": granularity,
+                "large_order_threshold": float(threshold),
+                "large_order_threshold_note": threshold_note,
+            },
         }
     
     def get_algorithm_description(self) -> str:
