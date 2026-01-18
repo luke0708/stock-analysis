@@ -9,5 +9,8 @@ pydantic>=2.0.0
 pyarrow>=14.0.0
 python-dotenv>=1.0.0
 
+
+# Tools
 pypinyin>=0.40.0
+# Networking
 requests>=2.30.0
