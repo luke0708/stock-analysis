@@ -31,7 +31,19 @@ class TickFlowAnalyzer:
             quality_flags.append("missing_nature")
 
         direction_map = {"买盘": 1, "卖盘": -1, "中性盘": 0}
-        df_anal["方向"] = df_anal["性质"].map(direction_map).fillna(0).astype(int)
+        df_anal["方向"] = df_anal["性质"].map(direction_map)
+        na_ratio = float(df_anal["方向"].isna().mean()) if len(df_anal) > 0 else 0.0
+        if na_ratio > 0.1:
+            quality_flags.append("direction_na_high")
+            logger.warning("方向字段 NA 比例偏高: %.1f%%", na_ratio * 100)
+        if na_ratio == 1.0:
+            quality_flags.append("direction_all_na")
+        df_anal["方向"] = df_anal["方向"].fillna(0).astype(int)
+        if df_anal["方向"].abs().sum() == 0 and "成交价格" in df_anal.columns:
+            price_change = df_anal["成交价格"].diff().fillna(0)
+            df_anal.loc[price_change > 0, "方向"] = 1
+            df_anal.loc[price_change < 0, "方向"] = -1
+            quality_flags.append("direction_fallback_price_change")
 
         if "成交额(元)" not in df_anal.columns:
             quality_flags.append("missing_amount")

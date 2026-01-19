@@ -3,6 +3,7 @@ A股资金流向智能分析系统 - 统一入口 (v2.2)
 整合个股分析、市场仪表盘、自选股管理等功能
 """
 import sys
+import logging
 from pathlib import Path
 
 # 添加项目根目录到路径
@@ -22,6 +23,11 @@ from stock_analysis.ui.global_markets_page import show_global_markets
 from stock_analysis.ui.comparison_page import show_comparison_page
 from stock_analysis.ui.alert_page import show_alert_page
 from stock_analysis.core.prefetch import start_market_prefetch
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s - %(message)s"
+)
 
 # 页面配置 (必须在所有其他 streamlit 命令之前)
 st.set_page_config(

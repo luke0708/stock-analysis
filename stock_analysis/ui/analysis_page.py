@@ -423,15 +423,28 @@ def display_results(stock_code, analysis_date):
         and not tick_window_1m.empty
         and {"时间", "net_inflow", "turnover"}.issubset(tick_window_1m.columns)
     ):
-        df_chart = tick_window_1m.rename(
-                columns={
-                    "net_inflow": "净流入额",
-                    "turnover": "成交额(元)",
-                }
-            )[["时间", "净流入额", "成交额(元)"]].copy()
+        time_col = tick_window_1m["时间"]
+        if isinstance(time_col, pd.DataFrame):
+            time_col = time_col.iloc[:, 0]
+        net_inflow_col = tick_window_1m["net_inflow"]
+        if isinstance(net_inflow_col, pd.DataFrame):
+            net_inflow_col = net_inflow_col.iloc[:, 0]
+        turnover_col = tick_window_1m["turnover"]
+        if isinstance(turnover_col, pd.DataFrame):
+            turnover_col = turnover_col.iloc[:, 0]
+        df_chart = pd.DataFrame(
+            {
+                "时间": time_col.values,
+                "净流入额": net_inflow_col.values,
+                "成交额(元)": turnover_col.values,
+            }
+        )
         df_chart["累计净流入"] = df_chart["净流入额"].cumsum()
         if "cum_net_inflow_ema" in tick_window_1m.columns:
-            df_chart["累计净流入_ema"] = tick_window_1m["cum_net_inflow_ema"].values
+            ema_col = tick_window_1m["cum_net_inflow_ema"]
+            if isinstance(ema_col, pd.DataFrame):
+                ema_col = ema_col.iloc[:, 0]
+            df_chart["累计净流入_ema"] = ema_col.values
     else:
         def calc_net(row):
             amt = row.get('成交额(元)', row.get('amount', 0))
@@ -695,9 +708,22 @@ def _build_chart_context(df: pd.DataFrame, analysis: dict, tick_context: Optiona
             not window_1m.empty
             and {"时间", "net_inflow", "turnover"}.issubset(window_1m.columns)
         ):
-            df_chart = window_1m.rename(
-                columns={"net_inflow": "净流入额", "turnover": "成交额(元)"}
-            )[["时间", "净流入额", "成交额(元)"]].copy()
+            time_col = window_1m["时间"]
+            if isinstance(time_col, pd.DataFrame):
+                time_col = time_col.iloc[:, 0]
+            net_inflow_col = window_1m["net_inflow"]
+            if isinstance(net_inflow_col, pd.DataFrame):
+                net_inflow_col = net_inflow_col.iloc[:, 0]
+            turnover_col = window_1m["turnover"]
+            if isinstance(turnover_col, pd.DataFrame):
+                turnover_col = turnover_col.iloc[:, 0]
+            df_chart = pd.DataFrame(
+                {
+                    "时间": time_col.values,
+                    "净流入额": net_inflow_col.values,
+                    "成交额(元)": turnover_col.values,
+                }
+            )
 
     if '成交额(元)' not in df_chart.columns:
         if '成交额' in df_chart.columns:

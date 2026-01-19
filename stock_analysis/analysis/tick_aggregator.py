@@ -54,7 +54,17 @@ class TickAggregator:
             agg_df = grouped.agg(agg_dict)
 
             if isinstance(agg_df.columns, pd.MultiIndex):
-                agg_df.columns = ["_".join(col).strip() for col in agg_df.columns.values]
+                def _flatten(col):
+                    if not isinstance(col, tuple):
+                        return str(col)
+                    if len(col) == 1:
+                        return str(col[0])
+                    first, second = col[0], col[1]
+                    if second in ("", None, first):
+                        return str(first)
+                    return f"{first}_{second}"
+
+                agg_df.columns = [_flatten(col) for col in agg_df.columns.values]
 
             agg_df["trade_count"] = grouped.size()
             agg_df = agg_df[agg_df["trade_count"] > 0]
@@ -100,12 +110,21 @@ class TickAggregator:
                     agg_df["net_inflow"] = 0.0
 
             if "large_order_count" not in agg_df.columns:
-                agg_df["large_order_count"] = 0
+                if "is_large_order" in agg_df.columns:
+                    agg_df["large_order_count"] = agg_df["is_large_order"]
+                else:
+                    agg_df["large_order_count"] = 0
 
             if "buy_amount" not in agg_df.columns:
-                agg_df["buy_amount"] = 0.0
+                if "买盘额" in agg_df.columns:
+                    agg_df["buy_amount"] = agg_df["买盘额"]
+                else:
+                    agg_df["buy_amount"] = 0.0
             if "sell_amount" not in agg_df.columns:
-                agg_df["sell_amount"] = 0.0
+                if "卖盘额" in agg_df.columns:
+                    agg_df["sell_amount"] = agg_df["卖盘额"]
+                else:
+                    agg_df["sell_amount"] = 0.0
 
             agg_df["ofi"] = (agg_df["buy_amount"] - agg_df["sell_amount"]) / (
                 agg_df["buy_amount"] + agg_df["sell_amount"]
@@ -122,6 +141,9 @@ class TickAggregator:
                 agg_df["range_pct"] = agg_df["range_pct"].fillna(0.0) * 100
             else:
                 agg_df["range_pct"] = 0.0
+
+            if agg_df.columns.duplicated().any():
+                agg_df = agg_df.loc[:, ~agg_df.columns.duplicated()]
 
             agg_df = agg_df.reset_index()
             agg_df["time_window"] = agg_df["时间"].dt.strftime("%H:%M")
