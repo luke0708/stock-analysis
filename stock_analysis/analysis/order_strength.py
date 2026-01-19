@@ -71,7 +71,9 @@ class OrderStrengthAnalyzer:
         获取每分钟的买卖盘强度时序数据
         用于绘制买卖盘力度随时间变化的图表
         """
-        if df.empty or '时间' not in df.columns:
+        if df.empty or '时间' not in df.columns or '性质' not in df.columns:
+            return pd.DataFrame()
+        if '成交额(元)' not in df.columns:
             return pd.DataFrame()
         
         result_df = df.copy()

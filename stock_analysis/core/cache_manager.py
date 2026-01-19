@@ -12,7 +12,7 @@ class CacheManager:
     @staticmethod
     def clear_session_cache():
         """清除session state缓存"""
-        keys_to_clear = ['df', 'raw_df', 'actual_source', 'quality_report', 'all_analysis']
+        keys_to_clear = ['df', 'raw_df', 'tick_context', 'actual_source', 'quality_report', 'all_analysis']
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
@@ -73,18 +73,51 @@ class DataImporter:
         
         try:
             df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
-            
-            # 验证必要的列
-            required_cols = ['时间', '开盘', '收盘', '最高', '最低', '成交量', '成交额']
-            missing = [col for col in required_cols if col not in df.columns]
-            
-            if missing:
-                return None, False, f"缺少必要列: {', '.join(missing)}"
-            
-            # 确保时间列是datetime类型
-            df['时间'] = pd.to_datetime(df['时间'])
-            
-            return df, True, f"成功导入 {len(df)} 条数据"
+
+            col_map = {
+                '成交时间': '时间',
+                'time': '时间',
+                'datetime': '时间',
+                '成交价格': '成交价格',
+                '价格': '成交价格',
+                '最新价': '成交价格',
+                'price': '成交价格',
+                '成交量': '成交量',
+                'vol': '成交量',
+                'volume': '成交量',
+                '成交额': '成交额',
+                '成交金额': '成交额',
+                'amount': '成交额',
+                '性质': '性质',
+                'type': '性质',
+                '买卖盘性质': '性质',
+            }
+            df = df.rename(columns=col_map)
+
+            # 分钟数据验证
+            minute_required = ['时间', '开盘', '收盘', '最高', '最低', '成交量', '成交额']
+            minute_missing = [col for col in minute_required if col not in df.columns]
+
+            if not minute_missing:
+                df['时间'] = pd.to_datetime(df['时间'], errors='coerce')
+                return df, True, f"成功导入 {len(df)} 条数据"
+
+            # Tick 数据验证
+            has_time = '时间' in df.columns
+            has_price = '成交价格' in df.columns
+            has_volume = '成交量' in df.columns
+            has_amount = any(col in df.columns for col in ['成交额', '成交金额', '成交额(元)'])
+
+            if has_time and has_price and (has_volume or has_amount):
+                time_series = df['时间'].astype(str).str.strip()
+                has_date = time_series.str.contains(r"\\d{4}[-/]\\d{2}[-/]\\d{2}")
+                if has_date.any():
+                    df['时间'] = pd.to_datetime(time_series, errors='coerce')
+                df.attrs['data_type'] = 'tick'
+                return df, True, f"成功导入 {len(df)} 条数据 (Tick)"
+
+            tick_hint = "若导入逐笔Tick，请包含: 时间, 成交价格, 成交量/成交额(或成交金额), 性质(可选)"
+            return None, False, f"缺少必要列: {', '.join(minute_missing)}。{tick_hint}"
             
         except Exception as e:
             return None, False, f"导入失败: {str(e)}"

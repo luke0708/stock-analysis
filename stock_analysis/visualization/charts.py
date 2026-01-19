@@ -188,6 +188,93 @@ class ChartGenerator:
         fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
         
         return fig
+
+    @staticmethod
+    def create_ofi_trend_chart(df: pd.DataFrame) -> go.Figure:
+        """
+        创建订单流失衡（OFI）走势
+        """
+        df_copy = df.copy()
+        if df_copy.empty or '时间' not in df_copy.columns or 'ofi' not in df_copy.columns:
+            return go.Figure()
+
+        df_copy['时间'] = pd.to_datetime(df_copy['时间'], errors='coerce')
+        df_copy = df_copy.dropna(subset=['时间'])
+
+        clip_val = df_copy['ofi'].abs().quantile(0.95)
+        if pd.isna(clip_val) or clip_val == 0:
+            clip_val = 1
+        df_copy['ofi_clip'] = df_copy['ofi'].clip(-clip_val, clip_val)
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df_copy['时间'],
+            y=df_copy['ofi_clip'],
+            mode='lines+markers',
+            name='OFI',
+            line=dict(color='#5c7cfa', width=2),
+            marker=dict(size=4)
+        ))
+
+        fig.add_hline(y=0, line_dash="dash", line_color="gray")
+        fig.update_layout(
+            title="订单流失衡 (OFI) 走势",
+            height=350,
+            hovermode='x unified',
+            template='plotly_white',
+            showlegend=False
+        )
+        fig.update_yaxes(title_text="OFI")
+        fig.update_xaxes(title_text="时间")
+        return fig
+
+    @staticmethod
+    def create_trade_density_chart(df: pd.DataFrame) -> go.Figure:
+        """
+        创建成交密度与短时波动图
+        """
+        if df.empty or '时间' not in df.columns:
+            return go.Figure()
+
+        df_copy = df.copy()
+        df_copy['时间'] = pd.to_datetime(df_copy['时间'], errors='coerce')
+        df_copy = df_copy.dropna(subset=['时间'])
+
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+        if 'trade_count' in df_copy.columns:
+            fig.add_trace(
+                go.Bar(
+                    x=df_copy['时间'],
+                    y=df_copy['trade_count'],
+                    name='成交笔数',
+                    marker_color='rgba(120,120,120,0.5)'
+                ),
+                secondary_y=False
+            )
+
+        if 'range_pct' in df_copy.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df_copy['时间'],
+                    y=df_copy['range_pct'],
+                    name='波动率(%)',
+                    line=dict(color='#ff922b', width=2)
+                ),
+                secondary_y=True
+            )
+
+        fig.update_layout(
+            title="成交密度与短时波动",
+            height=350,
+            hovermode='x unified',
+            template='plotly_white',
+            showlegend=False
+        )
+        fig.update_yaxes(title_text="成交笔数", secondary_y=False)
+        fig.update_yaxes(title_text="波动率(%)", secondary_y=True)
+        fig.update_xaxes(title_text="时间")
+        return fig
     
     @staticmethod
     def create_cumulative_change_chart(df: pd.DataFrame) -> go.Figure:
@@ -410,6 +497,8 @@ class ChartGenerator:
             df: 包含'净流入额'和'累计净流入'的DataFrame
         """
         fig = go.Figure()
+
+        y_col = '累计净流入_ema' if '累计净流入_ema' in df.columns else '累计净流入'
         
         # 填充区域颜色根据正负变化 (Plotly fill property limit, simplified here)
         # 简单处理：绿色填充如果<0，红色如果>0 (需要更复杂逻辑，这里简化为红色填充全部)
@@ -417,13 +506,25 @@ class ChartGenerator:
         
         fig.add_trace(go.Scatter(
             x=df['时间'],
-            y=df['累计净流入'],
+            y=df[y_col],
             mode='lines',
-            name='累计净流入',
+            name='累计净流入(平滑)' if y_col != '累计净流入' else '累计净流入',
             line=dict(color='#ff4d4f', width=2),
             fill='tozeroy',
             fillcolor='rgba(255, 77, 79, 0.1)' # 浅红填充
         ))
+
+        auction_marker = df.attrs.get("auction_marker")
+        if auction_marker:
+            fig.add_trace(go.Scatter(
+                x=[auction_marker.get("time")],
+                y=[auction_marker.get("value", 0)],
+                mode="markers+text",
+                text=["▲"],
+                textposition="top center",
+                marker=dict(color="#faad14", size=10),
+                name="集合竞价"
+            ))
         
         # 增加零轴
         fig.add_hline(y=0, line_dash="dash", line_color="gray")
