@@ -118,7 +118,7 @@ def show_analysis_page():
         
         if import_option == "实时获取":
             with st.spinner(f"正在获取 {stock_code} 在 {date_str} 的数据..."):
-                df, actual_source = fetch_data(stock_code, date_str, provider_choice, tushare_token)
+                df, actual_source, raw_df = fetch_data(stock_code, date_str, provider_choice, tushare_token)
                 
                 if df.empty:
                     requested_date = df.attrs.get('requested_date')
@@ -135,7 +135,7 @@ def show_analysis_page():
                     actual_date = df.attrs.get('actual_date')
                     if requested_date and actual_date and requested_date != actual_date:
                         st.info(f"所选日期无交易数据，已自动切换到最近交易日 {actual_date}。")
-                    process_and_display(df, stock_code, analysis_date, actual_source)
+                    process_and_display(df, stock_code, analysis_date, actual_source, raw_df)
     
     # 显示已存在的结果 (如果有)
     if 'df' in st.session_state and st.session_state.df is not None:
@@ -151,11 +151,12 @@ def process_imported_data(df):
     
     st.session_state.df = df_with_indicators
     st.session_state.actual_source = "CSV导入"
+    st.session_state.raw_df = None
     st.session_state.quality_report = quality_report
     st.session_state.all_analysis = perform_all_analysis(df_with_indicators)
     st.session_state.last_stock_code = "导入数据"
 
-def process_and_display(df, stock_code, analysis_date, actual_source):
+def process_and_display(df, stock_code, analysis_date, actual_source, raw_df=None):
     cleaner = DataCleaner()
     df_clean, quality_report = cleaner.clean(df)
     indicator_calc = IndicatorCalculator()
@@ -163,6 +164,7 @@ def process_and_display(df, stock_code, analysis_date, actual_source):
     
     st.session_state.df = df_with_indicators
     st.session_state.actual_source = actual_source
+    st.session_state.raw_df = raw_df
     st.session_state.quality_report = quality_report
     st.session_state.all_analysis = perform_all_analysis(df_with_indicators)
     st.session_state.last_stock_code = stock_code
@@ -170,6 +172,7 @@ def process_and_display(df, stock_code, analysis_date, actual_source):
 def fetch_data(stock_code, date_str, provider_choice, tushare_token):
     actual_source = None
     df = pd.DataFrame()
+    raw_df = None
     
     # 根据选择的逻辑
     use_tushare = "Tushare" in provider_choice
@@ -177,7 +180,7 @@ def fetch_data(stock_code, date_str, provider_choice, tushare_token):
     if use_tushare:
         if not tushare_token:
             st.error("❌ 请先输入 Tushare Token")
-            return df, actual_source
+            return df, actual_source, raw_df
         try:
             os.environ["TUSHARE_TOKEN"] = tushare_token
             settings.TUSHARE_TOKEN = tushare_token
@@ -198,7 +201,8 @@ def fetch_data(stock_code, date_str, provider_choice, tushare_token):
         df = provider.get_tick_data(stock_code, date_str=date_str)
         actual_source = "AkShare"
     
-    return df, actual_source
+    raw_df = df.attrs.get('raw_tick')
+    return df, actual_source, raw_df
 
 def perform_all_analysis(df):
     results = {}
@@ -475,8 +479,16 @@ def display_results(stock_code, analysis_date):
     # 保存功能
     st.subheader("💾 保存数据")
     date_str = analysis_date.strftime("%Y%m%d")
-    csv = df.to_csv(index=False).encode('utf-8-sig')
-    st.download_button("下载 CSV", csv, f"{stock_code}_{date_str}.csv", "text/csv")
+    raw_df = st.session_state.get('raw_df')
+    export_df = df
+    file_suffix = "minute"
+    if raw_df is not None and not raw_df.empty:
+        use_tick = st.toggle("下载 Tick 数据", value=True, help="仅当日实时获取可用")
+        if use_tick:
+            export_df = raw_df
+            file_suffix = "tick"
+    csv = export_df.to_csv(index=False).encode('utf-8-sig')
+    st.download_button("下载 CSV", csv, f"{stock_code}_{date_str}_{file_suffix}.csv", "text/csv")
 
 
 def _build_chart_context(df: pd.DataFrame, analysis: dict) -> dict:

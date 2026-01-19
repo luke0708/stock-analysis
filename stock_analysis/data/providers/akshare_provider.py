@@ -10,6 +10,102 @@ class AkShareProvider(StockDataProvider):
         today = date.today().strftime("%Y%m%d")
         return self.get_tick_data(code, today)
 
+    def _normalize_tick_raw(self, df: pd.DataFrame, date_str: str) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        df_copy = df.copy()
+        col_map = {
+            '成交时间': '时间',
+            '时间': '时间',
+            'time': '时间',
+            '成交价格': '成交价格',
+            '价格': '成交价格',
+            '最新价': '成交价格',
+            'price': '成交价格',
+            '成交量': '成交量',
+            'vol': '成交量',
+            'volume': '成交量',
+            '成交额': '成交额',
+            '成交金额': '成交额',
+            'amount': '成交额',
+            '性质': '性质',
+            'type': '性质',
+            '买卖盘性质': '性质',
+        }
+        df_copy = df_copy.rename(columns=col_map)
+
+        if '时间' not in df_copy.columns:
+            return pd.DataFrame()
+
+        time_series = df_copy['时间'].astype(str).str.strip()
+        date_prefix = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+        has_date = time_series.str.contains(r"\d{4}[-/]\d{2}[-/]\d{2}")
+        time_full = time_series.where(has_date, date_prefix + " " + time_series)
+        df_copy['时间'] = pd.to_datetime(time_full, errors='coerce')
+
+        if '成交价格' in df_copy.columns:
+            df_copy['成交价格'] = pd.to_numeric(df_copy['成交价格'], errors='coerce')
+        if '成交量' in df_copy.columns:
+            df_copy['成交量'] = pd.to_numeric(df_copy['成交量'], errors='coerce').fillna(0)
+        if '成交额' in df_copy.columns:
+            df_copy['成交额'] = pd.to_numeric(df_copy['成交额'], errors='coerce').fillna(0)
+
+        if '成交价格' in df_copy.columns:
+            df_copy = df_copy.dropna(subset=['时间', '成交价格'])
+        else:
+            df_copy = df_copy.dropna(subset=['时间'])
+        if df_copy.empty:
+            return pd.DataFrame()
+
+        if '成交额' not in df_copy.columns:
+            if '成交量' in df_copy.columns and '成交价格' in df_copy.columns:
+                df_copy['成交额'] = df_copy['成交量'] * df_copy['成交价格']
+            else:
+                df_copy['成交额'] = 0
+
+        return df_copy
+
+    def _normalize_realtime_tick(self, df: pd.DataFrame, date_str: str) -> pd.DataFrame:
+        tick_df = self._normalize_tick_raw(df, date_str)
+        if tick_df.empty or '成交价格' not in tick_df.columns:
+            return pd.DataFrame()
+
+        tick_df['分钟'] = tick_df['时间'].dt.floor('min')
+        grouped = tick_df.groupby('分钟', sort=True)
+
+        minute_df = grouped['成交价格'].agg(['first', 'last', 'max', 'min'])
+        minute_df = minute_df.rename(columns={
+            'first': '开盘',
+            'last': '收盘',
+            'max': '最高',
+            'min': '最低',
+        })
+
+        if '成交量' in tick_df.columns:
+            minute_df['成交量'] = grouped['成交量'].sum()
+        else:
+            minute_df['成交量'] = 0
+        minute_df['成交额'] = grouped['成交额'].sum()
+
+        minute_df = minute_df.reset_index().rename(columns={'分钟': '时间'})
+        minute_df['成交额(元)'] = minute_df['成交额']
+
+        minute_df['price_change'] = minute_df['收盘'].diff().fillna(0)
+
+        def get_type_from_momentum(change):
+            if change > 0:
+                return '买盘'
+            if change < 0:
+                return '卖盘'
+            return '中性盘'
+
+        minute_df['性质'] = minute_df['price_change'].apply(get_type_from_momentum)
+        minute_df.attrs['actual_date'] = date_str
+        minute_df.attrs['source_granularity'] = 'tick'
+        minute_df.attrs['raw_tick'] = tick_df
+        return minute_df
+
     def get_tick_data(self, code: str, date_str: str = None) -> pd.DataFrame:
         """
         Unified method to get tick data.
@@ -28,9 +124,13 @@ class AkShareProvider(StockDataProvider):
                 prefix = "sh" if code.startswith("6") else "sz"
                 symbol = f"{prefix}{code}"
                 df = ak.stock_zh_a_tick_tx_js(symbol=symbol)
-                
+
                 if df is not None and not df.empty:
-                    return df
+                    normalized_df = self._normalize_realtime_tick(df, date_str)
+                    if not normalized_df.empty:
+                        print(f"✅ Realtime tick converted to {len(normalized_df)} minute bars.")
+                        return normalized_df
+                    print("Realtime tick data lacks required fields after normalization.")
                 else:
                     print("Realtime data empty (possibly before market or weekend).")
             except Exception as e:

@@ -12,7 +12,7 @@ class CacheManager:
     @staticmethod
     def clear_session_cache():
         """清除session state缓存"""
-        keys_to_clear = ['df', 'actual_source', 'quality_report', 'all_analysis']
+        keys_to_clear = ['df', 'raw_df', 'actual_source', 'quality_report', 'all_analysis']
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
