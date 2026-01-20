@@ -969,6 +969,10 @@ def _build_tick_context(raw_df: pd.DataFrame, analysis_date, allow_imported: boo
         "retail_net_inflow": summary.get("retail_net_inflow", 0),
         "large_order_ratio": summary.get("large_order_count", 0) / trade_count * 100,
         "large_order_count": summary.get("large_order_count", 0),
+        "large_buy_amount": summary.get("large_buy_amount", 0),
+        "large_sell_amount": summary.get("large_sell_amount", 0),
+        "retail_buy_amount": summary.get("retail_buy_amount", 0),
+        "retail_sell_amount": summary.get("retail_sell_amount", 0),
         "flow_quality": {
             "direction_source": "tick",
             "data_granularity": "tick",

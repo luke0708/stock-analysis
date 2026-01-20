@@ -302,4 +302,41 @@ class AkShareProvider(StockDataProvider):
         return {"code": code, "name": "Unknown"}
         
     def get_history_data(self, code: str, start_date: date, end_date: date) -> pd.DataFrame:
-        pass # Not used in main flow currently
+        try:
+            start_str = start_date.strftime("%Y%m%d")
+            end_str = end_date.strftime("%Y%m%d")
+            df = ak.stock_zh_a_hist(
+                symbol=code,
+                period="daily",
+                start_date=start_str,
+                end_date=end_str,
+                adjust="qfq",
+            )
+        except Exception as exc:
+            print(f"Daily history fetch failed: {exc}")
+            return pd.DataFrame()
+
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        col_map = {
+            "date": "日期",
+            "开盘": "开盘",
+            "收盘": "收盘",
+            "最高": "最高",
+            "最低": "最低",
+            "成交量": "成交量",
+            "成交额": "成交额",
+            "volume": "成交量",
+            "amount": "成交额",
+        }
+        df = df.rename(columns=col_map)
+        if "日期" in df.columns:
+            df["日期"] = pd.to_datetime(df["日期"], errors="coerce")
+            df = df.dropna(subset=["日期"]).sort_values("日期")
+
+        for col in ["开盘", "收盘", "最高", "最低", "成交量", "成交额"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        return df
