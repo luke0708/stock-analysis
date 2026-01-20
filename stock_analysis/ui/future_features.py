@@ -13,6 +13,7 @@ from stock_analysis.data.stock_list import get_stock_provider
 from stock_analysis.data.providers.akshare_provider import AkShareProvider
 from stock_analysis.analysis.ai_client import get_deepseek_key, call_deepseek
 from stock_analysis.data.news_provider import StockNewsProvider
+from stock_analysis.analysis.price_range import PriceRangeAnalyzer
 
 
 @st.cache_data(ttl=300)
@@ -220,6 +221,21 @@ def _build_daily_trend(daily_df: pd.DataFrame, limit: int) -> Dict:
     ma10_last = df_tail["ma10"].iloc[-1]
     ma20_last = df_tail["ma20"].iloc[-1]
 
+    close_vs_ma5_pct = None
+    close_vs_ma10_pct = None
+    is_above_ma5 = None
+    is_above_ma10 = None
+    is_above_ma20 = None
+    if pd.notna(close_last) and close_last != 0:
+        if pd.notna(ma5_last) and ma5_last != 0:
+            close_vs_ma5_pct = (close_last - ma5_last) / ma5_last * 100
+            is_above_ma5 = close_last > ma5_last
+        if pd.notna(ma10_last) and ma10_last != 0:
+            close_vs_ma10_pct = (close_last - ma10_last) / ma10_last * 100
+            is_above_ma10 = close_last > ma10_last
+        if pd.notna(ma20_last) and ma20_last != 0:
+            is_above_ma20 = close_last > ma20_last
+
     if pd.notna(ma5_last) and pd.notna(ma10_last) and pd.notna(ma20_last):
         if ma5_last > ma10_last > ma20_last:
             ma_alignment = "bullish"
@@ -253,37 +269,6 @@ def _build_daily_trend(daily_df: pd.DataFrame, limit: int) -> Dict:
         if pd.notna(prev) and prev != 0:
             volume_change_pct = (recent / prev - 1) * 100
 
-    range_high = None
-    range_low = None
-    if "最高" in df_tail.columns:
-        range_high = df_tail["最高"].max()
-    if "最低" in df_tail.columns:
-        range_low = df_tail["最低"].min()
-    range_mid = None
-    range_width_pct = None
-    if (
-        range_high is not None
-        and range_low is not None
-        and pd.notna(range_high)
-        and pd.notna(range_low)
-    ):
-        range_mid = (range_high + range_low) / 2
-        if pd.notna(close_last) and close_last != 0:
-            range_width_pct = (range_high - range_low) / close_last * 100
-
-    atr_14 = None
-    if {"最高", "最低", "收盘"}.issubset(df_tail.columns):
-        prev_close = df_tail["收盘"].shift(1)
-        tr = pd.concat(
-            [
-                (df_tail["最高"] - df_tail["最低"]).abs(),
-                (df_tail["最高"] - prev_close).abs(),
-                (df_tail["最低"] - prev_close).abs(),
-            ],
-            axis=1,
-        ).max(axis=1)
-        atr_14 = tr.tail(14).mean()
-
     trend_label = "range"
     if return_pct is not None:
         if return_pct > 5 and ma_alignment == "bullish":
@@ -299,6 +284,7 @@ def _build_daily_trend(daily_df: pd.DataFrame, limit: int) -> Dict:
 
     return {
         "window_days": available_days,
+        "close_last": _safe_number(close_last),
         "return_pct": _safe_number(return_pct),
         "volatility_pct": _safe_number(daily_volatility),
         "max_drawdown_pct": _safe_number(max_drawdown),
@@ -308,12 +294,12 @@ def _build_daily_trend(daily_df: pd.DataFrame, limit: int) -> Dict:
         "ma_alignment": ma_alignment,
         "ma20_slope_pct": _safe_number(ma20_slope_pct),
         "close_vs_ma20_pct": _safe_number(close_vs_ma20_pct),
+        "close_vs_ma5_pct": _safe_number(close_vs_ma5_pct),
+        "close_vs_ma10_pct": _safe_number(close_vs_ma10_pct),
+        "is_above_ma5": is_above_ma5,
+        "is_above_ma10": is_above_ma10,
+        "is_above_ma20": is_above_ma20,
         "volume_change_pct": _safe_number(volume_change_pct),
-        "range_support": _safe_number(range_low),
-        "range_mid": _safe_number(range_mid),
-        "range_resistance": _safe_number(range_high),
-        "range_width_pct": _safe_number(range_width_pct),
-        "atr_14": _safe_number(atr_14),
         "trend_label": trend_label,
         "trend_strength": strength,
     }
@@ -354,6 +340,74 @@ def _build_tick_window_series(tick_context: Dict, limit: int) -> Tuple[List[Dict
             }
         )
     return series, window_minutes
+
+
+def _calc_limit_lock(timeseries: Dict) -> bool:
+    close = timeseries.get("close_price")
+    high = timeseries.get("high_price")
+    low = timeseries.get("low_price")
+    change_pct = timeseries.get("price_change_pct")
+    if close in (None, 0) or high is None or low is None or change_pct is None:
+        return False
+    try:
+        range_pct = (high - low) / close * 100
+    except Exception:
+        return False
+    if abs(change_pct) >= 9.5 and range_pct <= 0.3:
+        return True
+    return False
+
+
+def _calc_direction_reliability(tick_context: Optional[Dict], limit_lock: bool) -> str:
+    if limit_lock:
+        return "low"
+    if not tick_context:
+        return "low"
+    inferred_ratio = tick_context.get("inferred_ratio")
+    quality_flags = tick_context.get("quality_flags", [])
+    if "direction_all_na" in quality_flags or "direction_fallback_price_change" in quality_flags:
+        return "low"
+    if inferred_ratio is None:
+        return "medium"
+    if inferred_ratio >= 0.5:
+        return "low"
+    if inferred_ratio >= 0.2:
+        return "medium"
+    return "high"
+
+
+def _format_num(value: Optional[float], digits: int = 2) -> str:
+    if value is None:
+        return "未知"
+    try:
+        if np.isnan(value):
+            return "未知"
+    except Exception:
+        pass
+    fmt = f"{{:.{digits}f}}"
+    return fmt.format(value)
+
+
+def _format_pct(value: Optional[float], digits: int = 2) -> str:
+    if value is None:
+        return "未知"
+    try:
+        if np.isnan(value):
+            return "未知"
+    except Exception:
+        pass
+    fmt = f"{{:+.{digits}f}}%"
+    return fmt.format(value)
+
+
+def _bool_to_cn(value: Optional[bool]) -> str:
+    if value is None:
+        return "未知"
+    return "上方" if value else "下方"
+
+
+def _map_label(value: str, mapping: Dict[str, str]) -> str:
+    return mapping.get(value, value or "未知")
 
 
 def _extract_latest_time(df: pd.DataFrame) -> Optional[datetime]:
@@ -428,6 +482,204 @@ def _build_today_partial(
             "vwap": indicators.get("vwap"),
         },
     }
+
+
+def _build_readable_summary(
+    daily_trend: Dict,
+    price_range_analysis: Dict,
+    flow_block: Dict,
+    anomaly_highlights: List[Dict],
+    largest_trades_raw: List[Dict],
+) -> Dict:
+    trend_texts = []
+    if daily_trend:
+        trend_label = _map_label(daily_trend.get("trend_label", ""), {"up": "上行", "down": "下行", "range": "震荡"})
+        strength = _map_label(daily_trend.get("trend_strength", ""), {"strong": "强", "medium": "中", "weak": "弱"})
+        trend_texts.append(f"趋势状态: {trend_label}，强度: {strength}")
+        close_last = _format_num(daily_trend.get("close_last"))
+        ma5 = _format_num(daily_trend.get("ma5"))
+        ma10 = _format_num(daily_trend.get("ma10"))
+        ma20 = _format_num(daily_trend.get("ma20"))
+        rel_ma5 = _bool_to_cn(daily_trend.get("is_above_ma5"))
+        rel_ma10 = _bool_to_cn(daily_trend.get("is_above_ma10"))
+        rel_ma20 = _bool_to_cn(daily_trend.get("is_above_ma20"))
+        trend_texts.append(
+            f"收盘价 {close_last}，位于 MA5 {ma5}({rel_ma5})、MA10 {ma10}({rel_ma10})、MA20 {ma20}({rel_ma20})"
+        )
+        ma5_dev = _format_pct(daily_trend.get("close_vs_ma5_pct"))
+        ma10_dev = _format_pct(daily_trend.get("close_vs_ma10_pct"))
+        ma20_dev = _format_pct(daily_trend.get("close_vs_ma20_pct"))
+        trend_texts.append(
+            f"相对均线偏离: MA5 {ma5_dev}，MA10 {ma10_dev}，MA20 {ma20_dev}"
+        )
+        alignment = _map_label(daily_trend.get("ma_alignment", ""), {"bullish": "多头", "bearish": "空头", "mixed": "混合"})
+        trend_texts.append(f"均线排列: {alignment}")
+
+    range_texts = []
+    if price_range_analysis:
+        consensus = price_range_analysis.get("consensus_view", {})
+        support_zone = consensus.get("support_zone")
+        resistance_zone = consensus.get("resistance_zone")
+        if support_zone is not None or resistance_zone is not None:
+            range_texts.append(
+                f"共识区间: 支撑 {_format_num(support_zone)}，压力 {_format_num(resistance_zone)}"
+            )
+        pivot = price_range_analysis.get("pivot_classic", {})
+        if pivot:
+            range_texts.append(
+                f"Pivot 支撑/压力: S1 {_format_num(pivot.get('support_1'))} / R1 {_format_num(pivot.get('resistance_1'))}"
+            )
+        atr = price_range_analysis.get("atr_channel", {})
+        if atr:
+            range_texts.append(
+                f"ATR 通道: 下轨 {_format_num(atr.get('lower_band'))}，上轨 {_format_num(atr.get('upper_band'))}"
+            )
+
+    flow_texts = []
+    if flow_block:
+        net_inflow = flow_block.get("net_inflow")
+        ofi = flow_block.get("ofi")
+        if net_inflow is not None:
+            flow_texts.append(f"净流入 {net_inflow / 1e8:+.2f} 亿")
+        if ofi is not None:
+            flow_texts.append(f"OFI {ofi:+.4f}")
+        buy_amount = flow_block.get("buy_amount")
+        sell_amount = flow_block.get("sell_amount")
+        if buy_amount is not None or sell_amount is not None:
+            flow_texts.append(
+                f"买盘 {_format_num((buy_amount or 0) / 1e8)} 亿 / 卖盘 {_format_num((sell_amount or 0) / 1e8)} 亿"
+            )
+        buy_count = flow_block.get("buy_count")
+        sell_count = flow_block.get("sell_count")
+        if buy_count is not None or sell_count is not None:
+            flow_texts.append(f"买盘笔数 {buy_count or 0} / 卖盘笔数 {sell_count or 0}")
+        buy_count_ratio = flow_block.get("buy_count_ratio")
+        sell_count_ratio = flow_block.get("sell_count_ratio")
+        if buy_count_ratio is not None or sell_count_ratio is not None:
+            flow_texts.append(
+                f"笔数占比: 买盘 {_format_pct((buy_count_ratio or 0) * 100)} / 卖盘 {_format_pct((sell_count_ratio or 0) * 100)}"
+            )
+        avg_buy_amount = flow_block.get("avg_buy_amount")
+        avg_sell_amount = flow_block.get("avg_sell_amount")
+        if avg_buy_amount is not None or avg_sell_amount is not None:
+            flow_texts.append(
+                f"单笔均额: 买盘 {_format_num((avg_buy_amount or 0) / 1e4)} 万 / 卖盘 {_format_num((avg_sell_amount or 0) / 1e4)} 万"
+            )
+        neutral_amount = flow_block.get("neutral_amount")
+        if neutral_amount:
+            flow_texts.append(f"中性盘 {_format_num(neutral_amount / 1e8)} 亿")
+        neutral_ratio = flow_block.get("neutral_ratio")
+        direction_coverage = flow_block.get("direction_coverage")
+        if neutral_ratio is not None:
+            flow_texts.append(f"中性盘占比 {_format_pct(neutral_ratio * 100)}")
+        if direction_coverage is not None:
+            flow_texts.append(f"方向覆盖率 {_format_pct(direction_coverage * 100)}")
+
+    anomaly_texts = []
+    if anomaly_highlights:
+        for item in anomaly_highlights:
+            item_type = item.get("type", "")
+            if item_type == "significant_sell":
+                anomaly_texts.append(
+                    f"显著卖盘 {item.get('time', '')} 金额 {_format_num(item.get('amount', 0) / 1e8)} 亿"
+                )
+            elif item_type == "significant_buy":
+                anomaly_texts.append(
+                    f"显著买盘 {item.get('time', '')} 金额 {_format_num(item.get('amount', 0) / 1e8)} 亿"
+                )
+            elif item_type == "window_outflow":
+                anomaly_texts.append(
+                    f"窗口净流出 {item.get('time_window', '')} 净流入 {_format_num((item.get('net_inflow') or 0) / 1e8)} 亿"
+                )
+            elif item_type == "window_inflow":
+                anomaly_texts.append(
+                    f"窗口净流入 {item.get('time_window', '')} 净流入 {_format_num((item.get('net_inflow') or 0) / 1e8)} 亿"
+                )
+            elif item_type == "summary_counts":
+                anomaly_texts.append(
+                    f"异常统计: 大额成交 {item.get('large_order_count', 0)}，价格跳跃 {item.get('price_spike_count', 0)}，量能放大 {item.get('volume_surge_count', 0)}"
+                )
+
+    if largest_trades_raw:
+        for item in largest_trades_raw:
+            anomaly_texts.append(
+                f"原始最大成交 {item.get('time', '')} 金额 {_format_num(item.get('amount_1e8', 0))} 亿 方向 {item.get('direction', '中性盘')}"
+            )
+
+    return {
+        "trend": trend_texts,
+        "price_range": range_texts,
+        "flow": flow_texts,
+        "anomalies": anomaly_texts,
+    }
+
+
+def _build_anomaly_highlights(
+    tick_context: Optional[Dict],
+    tick_window_series: List[Dict],
+    anomalies: Dict,
+) -> List[Dict]:
+    highlights: List[Dict] = []
+    if tick_context and tick_context.get("large_orders_top5"):
+        large_orders = tick_context["large_orders_top5"]
+        sells = [o for o in large_orders if "卖" in str(o.get("type", ""))]
+        buys = [o for o in large_orders if "买" in str(o.get("type", ""))]
+        for item in sells[:2]:
+            highlights.append(
+                {
+                    "type": "significant_sell",
+                    "time": str(item.get("time", "")),
+                    "amount": _safe_number(item.get("amount")),
+                    "price": _safe_number(item.get("price")),
+                }
+            )
+        for item in buys[:2]:
+            highlights.append(
+                {
+                    "type": "significant_buy",
+                    "time": str(item.get("time", "")),
+                    "amount": _safe_number(item.get("amount")),
+                    "price": _safe_number(item.get("price")),
+                }
+            )
+
+    if tick_window_series:
+        sorted_series = sorted(
+            [w for w in tick_window_series if w.get("net_inflow") is not None],
+            key=lambda x: x.get("net_inflow"),
+        )
+        if sorted_series:
+            worst = sorted_series[0]
+            best = sorted_series[-1]
+            highlights.append(
+                {
+                    "type": "window_outflow",
+                    "time_window": str(worst.get("time_window", "")),
+                    "net_inflow": _safe_number(worst.get("net_inflow")),
+                    "turnover": _safe_number(worst.get("turnover")),
+                }
+            )
+            highlights.append(
+                {
+                    "type": "window_inflow",
+                    "time_window": str(best.get("time_window", "")),
+                    "net_inflow": _safe_number(best.get("net_inflow")),
+                    "turnover": _safe_number(best.get("turnover")),
+                }
+            )
+
+    summary = anomalies.get("summary", {}) if anomalies else {}
+    if summary:
+        highlights.append(
+            {
+                "type": "summary_counts",
+                "large_order_count": summary.get("large_order_count", 0),
+                "price_spike_count": summary.get("price_spike_count", 0),
+                "volume_surge_count": summary.get("volume_surge_count", 0),
+            }
+        )
+
+    return highlights
 
 def show_multi_stock_compare():
     st.header("⚖️ 多股票对比分析 (Coming Soon)")
@@ -641,6 +893,10 @@ def show_ai_analysis():
     )
     news_df = None
     stock_code = st.session_state.get("last_stock_code", "")
+    if not stock_code or stock_code == "导入数据":
+        fallback_code = st.session_state.get("stock_code", "")
+        if isinstance(fallback_code, str) and fallback_code.isdigit() and len(fallback_code) == 6:
+            stock_code = fallback_code
     if include_news:
         col_n1, col_n2 = st.columns([1, 3])
         with col_n1:
@@ -771,6 +1027,12 @@ def show_ai_analysis():
         st.markdown("### 💬 继续追问")
         st.caption("追问会基于“最新解读”的同一份数据快照与提示词继续回答。")
         st.caption(f"当前会话: {st.session_state.ai_last.get('session_id', '--')}")
+        followup_mode = st.radio(
+            "追问模式",
+            ["严格", "平衡", "开放"],
+            horizontal=True,
+            help="严格=仅用已有数据；平衡=允许有限推断；开放=可引入一般常识但需标注。",
+        )
         followup = st.text_input("基于当前解读继续提问", key="ai_followup")
         followup_btn = st.button("发送追问")
         if followup_btn:
@@ -784,7 +1046,9 @@ def show_ai_analysis():
                             focus=st.session_state.ai_last["focus"],
                             constraints=st.session_state.ai_last["constraints"],
                             previous_answer=st.session_state.ai_last["response"],
-                            followup=followup
+                            followup=followup,
+                            followup_mode=followup_mode,
+                            advice_mode=st.session_state.ai_last.get("advice_mode", ""),
                         )
                         follow_response = call_deepseek(
                             api_key=api_key,
@@ -793,7 +1057,12 @@ def show_ai_analysis():
                             temperature=st.session_state.ai_last.get("temperature", 0.2)
                         )
                         st.session_state.ai_last["followups"].append(
-                            {"q": followup, "a": follow_response}
+                            {
+                                "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "q": followup,
+                                "a": follow_response,
+                                "mode": followup_mode,
+                            }
                         )
                     except Exception as exc:
                         st.error(f"追问失败: {exc}")
@@ -801,8 +1070,12 @@ def show_ai_analysis():
 
         if st.session_state.ai_last["followups"]:
             st.markdown("#### 🧵 追问记录")
-            for item in st.session_state.ai_last["followups"][-5:]:
-                st.markdown(f"**Q**: {item['q']}")
+            recent_followups = st.session_state.ai_last["followups"][-5:]
+            recent_followups = sorted(recent_followups, key=lambda x: x.get("ts", ""))
+            for item in recent_followups:
+                mode_note = f" ({item.get('mode', '严格')})" if item.get("mode") else ""
+                ts_note = f"{item.get('ts', '')} | " if item.get("ts") else ""
+                st.markdown(f"**Q**: {ts_note}{item['q']}{mode_note}")
                 st.markdown(f"**A**: {item['a']}")
 
     if st.session_state.ai_history:
@@ -855,6 +1128,13 @@ def _build_context(
     daily_trend = _build_daily_trend(daily_df, daily_window)
     if daily_trend:
         daily_trend["partial_excluded"] = exclude_partial_daily
+    price_range_analysis = PriceRangeAnalyzer(
+        pivot_window=1,
+        atr_period=14,
+        atr_multiplier=2.0,
+        donchian_window=daily_window,
+        ema_window=20,
+    ).analyze(daily_df)
     today_partial = _build_today_partial(
         df=st.session_state.df,
         timeseries=analysis.get("timeseries", {}),
@@ -901,34 +1181,92 @@ def _build_context(
             for o in large_orders_sorted[:3]
         ]
 
-    flow_block = {
-        "large_net": flows.get("large_order_net_inflow"),
-        "retail_net": flows.get("retail_net_inflow"),
-        "large_ratio": flows.get("large_order_ratio"),
-        "large_buy": flows.get("large_buy_amount"),
-        "large_sell": flows.get("large_sell_amount"),
-        "quality": flows.get("flow_quality", {}),
-    }
+    limit_lock = _calc_limit_lock(timeseries)
+    direction_reliability = _calc_direction_reliability(tick_context, limit_lock)
+
+    buy_amount = None
+    sell_amount = None
+    neutral_amount = None
+    net_inflow = None
+    trade_count = None
+    buy_count = None
+    sell_count = None
+    neutral_count = None
+    ofi = None
     if tick_available:
-        flow_block.update(
-            {
-                "trade_count": flows.get("trade_count"),
-                "buy_count": flows.get("buy_count"),
-                "sell_count": flows.get("sell_count"),
-                "neutral_count": flows.get("neutral_count"),
-                "buy_amount": flows.get("buy_amount"),
-                "sell_amount": flows.get("sell_amount"),
-                "net_inflow": flows.get("net_inflow"),
-                "buy_ratio": flows.get("buy_ratio"),
-                "sell_ratio": flows.get("sell_ratio"),
-                "ofi": flows.get("ofi"),
-            }
-        )
+        buy_amount = flows.get("buy_amount")
+        sell_amount = flows.get("sell_amount")
+        neutral_amount = flows.get("neutral_amount")
+        net_inflow = flows.get("net_inflow")
+        neutral_ratio = flows.get("neutral_ratio")
+        direction_coverage = flows.get("direction_coverage")
+        trade_count = flows.get("trade_count")
+        buy_count = flows.get("buy_count")
+        sell_count = flows.get("sell_count")
+        neutral_count = flows.get("neutral_count")
+        buy_count_ratio = flows.get("buy_count_ratio")
+        sell_count_ratio = flows.get("sell_count_ratio")
+        avg_buy_amount = flows.get("avg_buy_amount")
+        avg_sell_amount = flows.get("avg_sell_amount")
+        ofi = flows.get("ofi")
+    else:
+        large_buy = flows.get("large_buy_amount", 0) or 0
+        retail_buy = flows.get("retail_buy_amount", 0) or 0
+        large_sell = flows.get("large_sell_amount", 0) or 0
+        retail_sell = flows.get("retail_sell_amount", 0) or 0
+        buy_amount = large_buy + retail_buy
+        sell_amount = large_sell + retail_sell
+        net_inflow = flows.get("large_order_net_inflow", 0) + flows.get("retail_net_inflow", 0)
+        denom = buy_amount + sell_amount
+        ofi = (buy_amount - sell_amount) / denom if denom > 0 else None
+        neutral_ratio = None
+        direction_coverage = None
+        buy_count_ratio = None
+        sell_count_ratio = None
+        avg_buy_amount = None
+        avg_sell_amount = None
+
+    flow_quality = flows.get("flow_quality", {})
+    flow_quality = {
+        **flow_quality,
+        "direction_reliability": direction_reliability,
+        "limit_lock": limit_lock,
+        "inferred_ratio": tick_context.get("inferred_ratio") if tick_available else None,
+        "neutral_note": "中性盘=方向无法判定的成交",
+    }
+
+    flow_block = {
+        "buy_amount": buy_amount,
+        "sell_amount": sell_amount,
+        "neutral_amount": neutral_amount,
+        "neutral_ratio": neutral_ratio,
+        "direction_coverage": direction_coverage,
+        "buy_count_ratio": buy_count_ratio,
+        "sell_count_ratio": sell_count_ratio,
+        "avg_buy_amount": avg_buy_amount,
+        "avg_sell_amount": avg_sell_amount,
+        "net_inflow": net_inflow,
+        "ofi": ofi,
+        "trade_count": trade_count,
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "neutral_count": neutral_count,
+        "quality": flow_quality,
+    }
 
     tick_window_series = []
     window_minutes = None
     if tick_available:
         tick_window_series, window_minutes = _build_tick_window_series(tick_context, limit=40)
+    anomaly_highlights = _build_anomaly_highlights(tick_context, tick_window_series, anomalies)
+    largest_trades_raw = tick_context.get("largest_trades_raw", []) if tick_context else []
+    readable_summary = _build_readable_summary(
+        daily_trend,
+        price_range_analysis,
+        flow_block,
+        anomaly_highlights,
+        largest_trades_raw,
+    )
 
     data_scope = {
         "date": actual_date or requested_date,
@@ -939,6 +1277,9 @@ def _build_context(
         "quality_flags": tick_context.get("quality_flags", []) if tick_available else [],
         "daily_window_days": daily_window,
         "daily_partial_excluded": exclude_partial_daily,
+        "price_range_methods": price_range_analysis.get("methods_applied", [])
+        if price_range_analysis
+        else [],
     }
 
     context = {
@@ -982,7 +1323,10 @@ def _build_context(
         },
         "daily_series": daily_series,
         "daily_trend": daily_trend,
+        "price_range_analysis": price_range_analysis,
         "today_partial": today_partial,
+        "readable_summary": readable_summary,
+        "anomaly_highlights": anomaly_highlights,
     }
     if tick_context:
         tick_summary = tick_context.get("tick_ai_summary", {})
@@ -998,6 +1342,8 @@ def _build_context(
             "volume_unit": tick_context.get("volume_unit"),
             "inferred_ratio": tick_context.get("inferred_ratio"),
         }
+        if largest_trades_raw:
+            context["largest_trades_raw"] = largest_trades_raw
     if include_news:
         context["news"] = _build_news_payload(news_df, stock_name)
     return context
@@ -1027,14 +1373,36 @@ def _build_prompts(
         constraints.append("必须引用关键数值作为依据")
     if add_watchlist:
         constraints.append("给出可观察的触发条件或关键变量")
-    constraints.append("必须引用 daily_trend 或 daily_series 的关键数值作为趋势依据")
+    constraints.append("引用数值时不要输出字段名或 JSON 路径，改用自然语言表述")
+    if context.get("readable_summary"):
+        constraints.append("优先使用 readable_summary 的表述与数值")
+    constraints.append("必须引用 daily_trend 或 daily_series 的关键数值作为趋势依据（可通过 readable_summary）")
     if not context.get("daily_series"):
         constraints.append("若日线数据为空，需明确说明趋势依据不足")
     if context.get("today_partial", {}).get("scope", {}).get("is_partial"):
         constraints.append("today_partial 为盘中快照，不能与日线量能直接对比")
+    flow_quality = context.get("flow", {}).get("quality", {})
+    if flow_quality.get("direction_reliability") == "low" or flow_quality.get("limit_lock"):
+        constraints.append("买卖盘方向可靠性偏低，避免给出明确买卖方向结论，仅描述成交节奏与量能")
+    if context.get("daily_trend"):
+        constraints.append(
+            "均线高低关系必须使用 daily_trend 中已计算的高低关系与偏离百分比，"
+            "不要自行比较均线数值"
+        )
+    if context.get("flow"):
+        constraints.append("资金流解读优先使用买卖笔数占比与单笔均额，避免推断主力/散户")
+    if context.get("flow", {}).get("direction_coverage") is not None:
+        constraints.append("若方向覆盖率偏低，需说明买卖盘无法覆盖全部成交额")
+    if context.get("readable_summary", {}).get("anomalies"):
+        constraints.append("关键异动需逐条引用 readable_summary.anomalies 中的条目，不要凭空推断原因如对敲/承接")
+    if context.get("largest_trades_raw"):
+        constraints.append("largest_trades_raw 为全天原始成交额最大榜单，包含中性盘，不代表方向强弱")
     if preset_mode == "range":
-        constraints.append("必须给出支撑/中枢/压力区间，并说明依据")
-        constraints.append("优先使用 daily_trend 的 range_support/range_mid/range_resistance/atr_14")
+        constraints.append("必须使用 price_range_analysis 给出区间，并注明所用方法")
+        constraints.append("若方法区间不一致，需说明分歧与共识区间")
+        constraints.append("如有 consensus_view，优先给出共识区间，再说明方法差异")
+        if not context.get("price_range_analysis"):
+            constraints.append("价格区间数据缺失时，明确说明无法给出区间")
     news_payload = context.get("news")
     if news_payload is not None:
         if news_payload.get("has_news"):
@@ -1084,7 +1452,7 @@ def _build_prompts(
         "条件触发建议(若/则，不做收益承诺)",
     ]
     if preset_mode == "range":
-        output_format.insert(1, "价格区间建议(支撑/中枢/压力)")
+        output_format.insert(1, "价格区间建议(注明方法与区间)")
 
     user_prompt = {
         "分析目标": focus,
@@ -1127,7 +1495,9 @@ def _build_followup_prompt(
     focus: str,
     constraints: List[str],
     previous_answer: str,
-    followup: str
+    followup: str,
+    followup_mode: str,
+    advice_mode: str
 ) -> str:
     focus_map = {
         "资金流向解读": ["主力/散户净流入", "累计净流入", "大单占比"],
@@ -1135,10 +1505,32 @@ def _build_followup_prompt(
         "风险与异动": ["价格跳跃", "成交量激增", "大单异常"],
         "主力行为复盘": ["主力净流入与价格一致性", "主力买卖额差异"],
     }
+
+    mode_rules = {
+        "严格": [
+            "仅基于已有数据快照回答，不引入新信息",
+            "必须引用关键数据或指标作为依据",
+            "无法判断时明确说明原因",
+        ],
+        "平衡": [
+            "以已有数据为主，可做有限推断并明确为推断",
+            "尽量引用关键数据，必要时给出合理假设",
+            "不扩展到无关话题",
+        ],
+        "开放": [
+            "可引入一般金融常识或新的补充信息，但必须标注为假设/常识",
+            "若新增信息可能改变结论，需要明确提示不确定性",
+            "避免编造具体事件或未验证数据",
+        ],
+    }
+
     payload = {
         "任务": "基于已有解读继续回答追问，保持金融交易语境",
         "分析目标": focus,
         "约束": constraints,
+        "追问模式": followup_mode,
+        "追问规则": mode_rules.get(followup_mode, mode_rules["严格"]),
+        "输出模式": advice_mode or "分析模式",
         "重点关注": focus_map.get(focus, []),
         "已有解读": previous_answer,
         "追问": followup,

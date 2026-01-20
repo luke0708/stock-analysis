@@ -21,6 +21,7 @@ pip install -r requirements.txt
 ```ini
 TUSHARE_TOKEN=your_token_here
 DEEPSEEK_API_KEY=your_key_here
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 ```
 
 ### 1.4 启动方式

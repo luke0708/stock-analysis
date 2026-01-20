@@ -70,9 +70,30 @@ class DataImporter:
             (df, success, message)
         """
         import pandas as pd
+        import re
         
         try:
+            if hasattr(uploaded_file, "seek"):
+                uploaded_file.seek(0)
             df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
+
+            # 尝试从文件名或列中识别股票代码
+            code = ""
+            filename = getattr(uploaded_file, "name", "") or ""
+            match = re.search(r"(\\d{6})", filename)
+            if match:
+                code = match.group(1)
+            else:
+                code_cols = ["代码", "股票代码", "证券代码", "symbol", "ts_code"]
+                for col in code_cols:
+                    if col in df.columns and not df[col].empty:
+                        candidate = str(df[col].iloc[0]).strip()
+                        m = re.search(r"(\\d{6})", candidate)
+                        if m:
+                            code = m.group(1)
+                            break
+            if code:
+                df.attrs["stock_code"] = code
 
             col_map = {
                 '成交时间': '时间',

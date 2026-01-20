@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Tuple
 
 import requests
@@ -24,7 +25,9 @@ def call_deepseek(
     user_prompt: str,
     model: str = "deepseek-chat",
     temperature: float = 0.2,
-    max_tokens: int = 800
+    max_tokens: int = 800,
+    timeout: int = 60,
+    max_retries: int = 2
 ) -> str:
     url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").rstrip("/") + "/chat/completions"
     headers = {
@@ -40,12 +43,51 @@ def call_deepseek(
             {"role": "user", "content": user_prompt},
         ],
     }
-    resp = requests.post(url, headers=headers, json=payload, timeout=30)
-    if resp.status_code != 200:
-        logging.error("DeepSeek request failed: %s", resp.text)
-        raise RuntimeError(resp.text[:300])
-    data = resp.json()
-    choices = data.get("choices", [])
-    if not choices:
-        raise RuntimeError("Empty response from DeepSeek.")
-    return choices[0]["message"]["content"].strip()
+    retryable_status = {429, 500, 502, 503, 504}
+    last_error: Exception | None = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        except requests.exceptions.Timeout as exc:
+            last_error = exc
+            logging.warning("DeepSeek request timed out (attempt %s/%s)", attempt + 1, max_retries + 1)
+            if attempt < max_retries:
+                time.sleep(1.5 ** attempt)
+                continue
+            raise RuntimeError("DeepSeek request timed out.")
+        except requests.exceptions.RequestException as exc:
+            last_error = exc
+            logging.warning("DeepSeek request error (attempt %s/%s): %s", attempt + 1, max_retries + 1, exc)
+            if attempt < max_retries:
+                time.sleep(1.5 ** attempt)
+                continue
+            raise RuntimeError("DeepSeek request failed.")
+
+        if resp.status_code in retryable_status and attempt < max_retries:
+            logging.warning("DeepSeek retryable status: %s", resp.status_code)
+            time.sleep(1.5 ** attempt)
+            continue
+
+        if resp.status_code != 200:
+            logging.error("DeepSeek request failed: %s", resp.text)
+            raise RuntimeError(resp.text[:300])
+
+        data = resp.json()
+        choices = data.get("choices", [])
+        if not choices:
+            if attempt < max_retries:
+                time.sleep(1.5 ** attempt)
+                continue
+            raise RuntimeError("Empty response from DeepSeek.")
+        content = choices[0].get("message", {}).get("content")
+        if not content:
+            if attempt < max_retries:
+                time.sleep(1.5 ** attempt)
+                continue
+            raise RuntimeError("Empty response from DeepSeek.")
+        return content.strip()
+
+    if last_error:
+        raise RuntimeError(str(last_error))
+    raise RuntimeError("DeepSeek request failed.")

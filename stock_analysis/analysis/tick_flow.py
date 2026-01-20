@@ -60,6 +60,9 @@ class TickFlowAnalyzer:
         buy_amount = float(df_anal.loc[buy_mask, "成交额(元)"].sum())
         sell_amount = float(df_anal.loc[sell_mask, "成交额(元)"].sum())
         neutral_amount = float(df_anal.loc[neutral_mask, "成交额(元)"].sum())
+        buy_count = int(buy_mask.sum())
+        sell_count = int(sell_mask.sum())
+        neutral_count = int(neutral_mask.sum())
 
         denom = buy_amount + sell_amount
         buy_ratio = buy_amount / denom if denom > 0 else 0.0
@@ -116,14 +119,29 @@ class TickFlowAnalyzer:
         retail_sell_amount = sell_amount - large_sell_amount
         retail_net_inflow = retail_buy_amount - retail_sell_amount
 
+        neutral_ratio = neutral_amount / total_amount if total_amount > 0 else 0.0
+        active_turnover = buy_amount + sell_amount
+        direction_coverage = active_turnover / total_amount if total_amount > 0 else 0.0
+        active_count = buy_count + sell_count
+        buy_count_ratio = buy_count / active_count if active_count > 0 else 0.0
+        sell_count_ratio = sell_count / active_count if active_count > 0 else 0.0
+        avg_buy_amount = buy_amount / buy_count if buy_count > 0 else 0.0
+        avg_sell_amount = sell_amount / sell_count if sell_count > 0 else 0.0
+
         summary = {
             "trade_count": len(df_anal),
-            "buy_count": int(buy_mask.sum()),
-            "sell_count": int(sell_mask.sum()),
-            "neutral_count": int(neutral_mask.sum()),
+            "buy_count": buy_count,
+            "sell_count": sell_count,
+            "neutral_count": neutral_count,
             "buy_amount": buy_amount,
             "sell_amount": sell_amount,
             "neutral_amount": neutral_amount,
+            "neutral_ratio": neutral_ratio,
+            "direction_coverage": direction_coverage,
+            "buy_count_ratio": buy_count_ratio,
+            "sell_count_ratio": sell_count_ratio,
+            "avg_buy_amount": avg_buy_amount,
+            "avg_sell_amount": avg_sell_amount,
             "net_inflow": buy_amount - sell_amount,
             "buy_ratio": buy_ratio,
             "sell_ratio": sell_ratio,

@@ -181,8 +181,26 @@ def _convert_tick_to_minute(df_tick: pd.DataFrame, analysis_date) -> tuple[pd.Da
     return minute_df, quality_flags
 
 
+def _infer_actual_date_from_time(df: pd.DataFrame) -> Optional[str]:
+    if df is None or df.empty or "时间" not in df.columns:
+        return None
+    if not pd.api.types.is_datetime64_any_dtype(df["时间"]):
+        return None
+    date_series = df["时间"].dt.date.dropna()
+    if date_series.empty:
+        return None
+    try:
+        date_val = date_series.mode().iloc[0]
+    except Exception:
+        date_val = date_series.iloc[-1]
+    return date_val.strftime("%Y%m%d")
+
+
 def process_imported_data(df, analysis_date=None):
     data_type = df.attrs.get("data_type", "minute") if df is not None else "minute"
+    stock_code = df.attrs.get("stock_code") or st.session_state.get("stock_code") or "导入数据"
+    if stock_code and stock_code != "导入数据":
+        df.attrs["stock_code"] = stock_code
     if data_type == "tick":
         minute_df, tick_flags = _convert_tick_to_minute(df, analysis_date)
         if minute_df.empty:
@@ -193,6 +211,11 @@ def process_imported_data(df, analysis_date=None):
         df_clean, quality_report = cleaner.clean(minute_df)
         indicator_calc = IndicatorCalculator()
         df_with_indicators = indicator_calc.calculate_all(df_clean)
+        inferred_date = _infer_actual_date_from_time(df_with_indicators)
+        if inferred_date:
+            df_with_indicators.attrs["actual_date"] = inferred_date
+        elif analysis_date is not None:
+            df_with_indicators.attrs["actual_date"] = analysis_date.strftime("%Y%m%d")
 
         st.session_state.df = df_with_indicators
         st.session_state.actual_source = "CSV导入(Tick)"
@@ -202,7 +225,7 @@ def process_imported_data(df, analysis_date=None):
         )
         st.session_state.quality_report = quality_report
         st.session_state.all_analysis = perform_all_analysis(df_with_indicators)
-        st.session_state.last_stock_code = "导入数据"
+        st.session_state.last_stock_code = stock_code
         if tick_flags:
             st.session_state.tick_import_flags = tick_flags
         return
@@ -211,6 +234,11 @@ def process_imported_data(df, analysis_date=None):
     df_clean, quality_report = cleaner.clean(df)
     indicator_calc = IndicatorCalculator()
     df_with_indicators = indicator_calc.calculate_all(df_clean)
+    inferred_date = _infer_actual_date_from_time(df_with_indicators)
+    if inferred_date:
+        df_with_indicators.attrs["actual_date"] = inferred_date
+    elif analysis_date is not None:
+        df_with_indicators.attrs["actual_date"] = analysis_date.strftime("%Y%m%d")
 
     st.session_state.df = df_with_indicators
     st.session_state.actual_source = "CSV导入"
@@ -218,7 +246,7 @@ def process_imported_data(df, analysis_date=None):
     st.session_state.tick_context = None
     st.session_state.quality_report = quality_report
     st.session_state.all_analysis = perform_all_analysis(df_with_indicators)
-    st.session_state.last_stock_code = "导入数据"
+    st.session_state.last_stock_code = stock_code
 
 def process_and_display(df, stock_code, analysis_date, actual_source, raw_df=None):
     cleaner = DataCleaner()
@@ -961,6 +989,20 @@ def _build_tick_context(raw_df: pd.DataFrame, analysis_date, allow_imported: boo
                 }
             )
 
+    largest_trades_raw = []
+    if processed_df is not None and not processed_df.empty and "成交额(元)" in processed_df.columns:
+        raw_top = processed_df.sort_values("成交额(元)", ascending=False).head(5)
+        for _, row in raw_top.iterrows():
+            largest_trades_raw.append(
+                {
+                    "time": row.get("时间"),
+                    "amount": float(row.get("成交额(元)", 0)),
+                    "amount_1e8": float(row.get("成交额(元)", 0)) / 1e8,
+                    "price": float(row.get("成交价格", row.get("收盘", 0))),
+                    "direction": row.get("性质", "中性盘"),
+                }
+            )
+
     summary = flow_result.get("summary", {})
     trade_count = summary.get("trade_count", 0) or 1
     flow_summary = {
@@ -990,6 +1032,13 @@ def _build_tick_context(raw_df: pd.DataFrame, analysis_date, allow_imported: boo
         "buy_ratio": summary.get("buy_ratio", 0),
         "sell_ratio": summary.get("sell_ratio", 0),
         "ofi": summary.get("ofi", 0),
+        "neutral_amount": summary.get("neutral_amount", 0),
+        "neutral_ratio": summary.get("neutral_ratio", 0),
+        "direction_coverage": summary.get("direction_coverage", 0),
+        "buy_count_ratio": summary.get("buy_count_ratio", 0),
+        "sell_count_ratio": summary.get("sell_count_ratio", 0),
+        "avg_buy_amount": summary.get("avg_buy_amount", 0),
+        "avg_sell_amount": summary.get("avg_sell_amount", 0),
     }
 
     volume_unit = "shares" if "volume_unit_shares" in quality_flags else "unknown"
@@ -1063,6 +1112,7 @@ def _build_tick_context(raw_df: pd.DataFrame, analysis_date, allow_imported: boo
         "burst_windows": anomaly_result.get("burst_windows", []),
         "anomaly_notes": anomaly_result.get("anomaly_notes", []),
         "quality_flags": quality_flags,
+        "largest_trades_raw": largest_trades_raw,
     }
 
 

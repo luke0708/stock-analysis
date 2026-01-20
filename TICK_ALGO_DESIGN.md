@@ -331,5 +331,5 @@
 
 ### 13.4 当前进展与待办
 
-- 已完成：tick 清洗/分析/聚合/异动模块；UI 接入 tick 图表与 AI 摘要；集合竞价显示开关；缓存中清理 tick 上下文。  
-- 待修复：tick 聚合输出全 0（OFI/净流入/买卖压力）导致图表与 AI 序列异常。  
+- 已完成：tick 聚合全 0 修复；AI 投顾接入 tick_summary/tick_window_series 与 data_scope；新增 daily_series/daily_trend/today_partial；价格区间工具箱（Pivot/ATR/Donchian）与共识区间；readable_summary 可读化输出；异常高亮 anomaly_highlights 与原始最大成交榜 largest_trades_raw；中性盘占比与方向覆盖率；买卖笔数占比与单笔均额；追问模式分级；CSV 导入代码识别、actual_date 推断与重复导入修复。  
+- 待观察：AI 解读可读性与关键异动呈现仍需持续调优。  
