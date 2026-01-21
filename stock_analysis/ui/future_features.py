@@ -493,7 +493,27 @@ def _build_readable_summary(
     flow_block: Dict,
     anomaly_highlights: List[Dict],
     largest_trades_raw: List[Dict],
+    today_partial: Optional[Dict],
 ) -> Dict:
+    intraday_texts = []
+    if today_partial:
+        scope = today_partial.get("scope", {})
+        price = today_partial.get("price", {})
+        liquidity = today_partial.get("liquidity", {})
+        as_of = scope.get("as_of")
+        close_now = _format_num(price.get("close"))
+        high = _format_num(price.get("high"))
+        low = _format_num(price.get("low"))
+        change_pct = _format_pct(price.get("change_pct"))
+        if close_now != "未知":
+            time_label = f"截至{as_of}" if as_of else "盘中快照"
+            intraday_texts.append(
+                f"{time_label} 盘中最新价 {close_now}，最高 {high}，最低 {low}，涨跌幅 {change_pct}"
+            )
+        vwap = _format_num(liquidity.get("vwap"))
+        if vwap != "未知":
+            intraday_texts.append(f"VWAP {vwap}")
+
     trend_texts = []
     if daily_trend:
         trend_label = _map_label(daily_trend.get("trend_label", ""), {"up": "上行", "down": "下行", "range": "震荡"})
@@ -612,6 +632,7 @@ def _build_readable_summary(
             )
 
     return {
+        "intraday": intraday_texts,
         "trend": trend_texts,
         "price_range": range_texts,
         "flow": flow_texts,
@@ -1036,7 +1057,7 @@ def show_ai_analysis():
             "追问模式",
             ["严格", "平衡", "开放"],
             horizontal=True,
-            help="严格=仅用已有数据；平衡=允许有限推断；开放=可引入一般常识但需标注。",
+            help="严格=仅用已有数据；平衡=允许有限推断；开放=完全开放对话，不受数据与格式限制。",
         )
         followup = st.text_input("基于当前解读继续提问", key="ai_followup")
         followup_btn = st.button("发送追问")
@@ -1076,7 +1097,7 @@ def show_ai_analysis():
         if st.session_state.ai_last["followups"]:
             st.markdown("#### 🧵 追问记录")
             recent_followups = st.session_state.ai_last["followups"][-5:]
-            recent_followups = sorted(recent_followups, key=lambda x: x.get("ts", ""))
+            recent_followups = sorted(recent_followups, key=lambda x: x.get("ts", ""), reverse=True)
             for item in recent_followups:
                 mode_note = f" ({item.get('mode', '严格')})" if item.get("mode") else ""
                 ts_note = f"{item.get('ts', '')} | " if item.get("ts") else ""
@@ -1271,6 +1292,7 @@ def _build_context(
         flow_block,
         anomaly_highlights,
         largest_trades_raw,
+        today_partial,
     )
 
     data_scope = {
@@ -1314,11 +1336,11 @@ def _build_context(
         "indicators": {
             "vwap": indicators.get("vwap"),
             "price_vs_vwap": indicators.get("price_vs_vwap"),
-            "ma5": indicators.get("ma5"),
-            "ma10": indicators.get("ma10"),
+            "minute_ma5": indicators.get("ma5"),
+            "minute_ma10": indicators.get("ma10"),
             "is_above_vwap": indicators.get("is_above_vwap"),
-            "is_above_ma5": indicators.get("is_above_ma5"),
-            "is_above_ma10": indicators.get("is_above_ma10"),
+            "is_above_minute_ma5": indicators.get("is_above_ma5"),
+            "is_above_minute_ma10": indicators.get("is_above_ma10"),
         },
         "anomalies": {
             "large_order_count": large_order_count,
@@ -1385,6 +1407,7 @@ def _build_prompts(
     constraints.append("事实描述：若为盘中快照，价格表述用“盘中最新价/截至时间”，不要称“当日收盘”")
     constraints.append("事实描述：均线高低关系基于日线收盘口径，不与盘中价格混用")
     constraints.append("事实描述：若 daily_trend.last_date 存在，日线口径需标注该日期")
+    constraints.append("事实描述：盘中均线需明确为“分钟MA”，否则默认指日线MA")
     constraints.append("事实描述：提到 MA/VWAP/ATR/区间时需带上数值（如 MA5(71.89)）")
     constraints.append("自由分析：可结合 daily_trend/daily_series 与当日资金变化做短期推演")
     constraints.append("自由分析：涉及操作建议需说明A股T+1，新开仓当天不可卖出")
@@ -1522,9 +1545,8 @@ def _build_followup_prompt(
             "不扩展到无关话题",
         ],
         "开放": [
-            "可引入一般金融常识或新的补充信息，但必须标注为假设/常识",
-            "若新增信息可能改变结论，需要明确提示不确定性",
-            "避免编造具体事件或未验证数据",
+            "完全开放对话，不受已有数据或格式约束",
+            "可自由发挥观点与推演，可忽略或仅参考数据快照",
         ],
     }
 
@@ -1543,9 +1565,15 @@ def _build_followup_prompt(
             "直接回答问题",
             "事实描述引用关键数据",
             "不扩展到无关话题",
-            "保持两块结构：事实描述 + 自由分析"
+            "保持两块结构：事实描述 + 自由分析",
         ],
     }
+    if followup_mode == "开放":
+        payload["任务"] = "自由回答追问，可使用或忽略数据快照与已有解读"
+        payload["约束"] = []
+        payload["输出模式"] = "自由对话"
+        payload["重点关注"] = []
+        payload["输出要求"] = ["直接回答问题"]
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
