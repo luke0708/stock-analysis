@@ -419,7 +419,7 @@ def display_results(stock_code, analysis_date):
         large_orders = analysis.get('anomalies', {}).get('summary', {}).get('large_order_count', 0)
         if tick_context and tick_context.get("flow_summary"):
             large_orders = tick_context["flow_summary"].get("large_order_count", large_orders)
-        st.metric("大单数量", f"{large_orders} 笔")
+        st.metric("显著成交数", f"{large_orders} 笔")
     
     st.markdown("---")
 
@@ -431,14 +431,21 @@ def display_results(stock_code, analysis_date):
     flows = analysis.get('flows', {})
     if tick_context and tick_context.get("flow_summary"):
         flows = tick_context["flow_summary"]
-    total_net = flows.get('large_order_net_inflow', 0) + flows.get('retail_net_inflow', 0)
+    buy_amount = flows.get("buy_amount")
+    sell_amount = flows.get("sell_amount")
+    if buy_amount is None:
+        buy_amount = flows.get("large_buy_amount", 0) + flows.get("retail_buy_amount", 0)
+    if sell_amount is None:
+        sell_amount = flows.get("large_sell_amount", 0) + flows.get("retail_sell_amount", 0)
+    net_inflow = flows.get("net_inflow", buy_amount - sell_amount)
+
     col_f1, col_f2, col_f3 = st.columns(3)
     with col_f1:
-        st.metric("主力净流入", f"¥{flows.get('large_order_net_inflow', 0)/1e8:.2f}亿")
+        st.metric("买盘总额", f"¥{buy_amount/1e8:.2f}亿")
     with col_f2:
-        st.metric("散户净流入", f"¥{flows.get('retail_net_inflow', 0)/1e8:.2f}亿")
+        st.metric("卖盘总额", f"¥{sell_amount/1e8:.2f}亿")
     with col_f3:
-        st.metric("总净流入", f"¥{total_net/1e8:.2f}亿")
+        st.metric("净流入", f"¥{net_inflow/1e8:.2f}亿")
 
     st.markdown("---")
 
@@ -544,12 +551,21 @@ def display_results(stock_code, analysis_date):
     strength_fig = cg.create_order_strength_chart(strength_df)
 
     with col_l:
-        st.markdown("**💼 主力/散户资金流构成 (30分钟)**")
+        st.markdown("**💼 买卖盘净流构成 (30分钟)**")
         st.plotly_chart(stacked_area_fig, use_container_width=True)
 
+        buy_amount = flow_data.get("buy_amount")
+        sell_amount = flow_data.get("sell_amount")
+        if buy_amount is None:
+            buy_amount = flow_data.get("large_buy_amount", 0) + flow_data.get("retail_buy_amount", 0)
+        if sell_amount is None:
+            sell_amount = flow_data.get("large_sell_amount", 0) + flow_data.get("retail_sell_amount", 0)
+        net_inflow = flow_data.get("net_inflow", buy_amount - sell_amount)
+
         st.info(f"""
-        **主力净流入**: ¥{flows.get('large_order_net_inflow', 0):,.0f}  
-        **散户净流入**: ¥{flows.get('retail_net_inflow', 0):,.0f}
+        **买盘总额**: ¥{buy_amount:,.0f}  
+        **卖盘总额**: ¥{sell_amount:,.0f}  
+        **净流入**: ¥{net_inflow:,.0f}
         """)
 
     with col_r:
@@ -587,7 +603,7 @@ def display_results(stock_code, analysis_date):
         st.markdown("---")
 
     # ===== 异动与追踪 =====
-    st.subheader("📉 价格异动与大单追踪")
+    st.subheader("📉 价格异动与显著成交")
     col_cum, col_orders = st.columns(2)
 
     with col_cum:
@@ -597,7 +613,7 @@ def display_results(stock_code, analysis_date):
             st.plotly_chart(cum_fig, use_container_width=True)
 
     with col_orders:
-        st.subheader("🎯 大单追踪")
+        st.subheader("🎯 显著成交追踪")
         anomalies = analysis.get('anomalies', {})
         large_orders_list = anomalies.get('large_orders', [])
         if tick_context and tick_context.get("large_orders_list"):
@@ -607,7 +623,7 @@ def display_results(stock_code, analysis_date):
             scatter_fig = cg.create_large_orders_scatter(large_orders_list, df)
             st.plotly_chart(scatter_fig, use_container_width=True)
         else:
-            st.info("今日暂无异常大单")
+            st.info("今日暂无显著成交")
 
     st.markdown("---")
 
@@ -776,17 +792,23 @@ def _build_chart_context(df: pd.DataFrame, analysis: dict, tick_context: Optiona
     else:
         cum_flow_last = 0.0
 
-    total_net = flows.get('large_order_net_inflow', 0) + flows.get('retail_net_inflow', 0)
+    buy_amount = flows.get("buy_amount")
+    sell_amount = flows.get("sell_amount")
+    if buy_amount is None:
+        buy_amount = flows.get("large_buy_amount", 0) + flows.get("retail_buy_amount", 0)
+    if sell_amount is None:
+        sell_amount = flows.get("large_sell_amount", 0) + flows.get("retail_sell_amount", 0)
+    net_inflow = flows.get("net_inflow", buy_amount - sell_amount)
 
     context = {
         "charts": [
             "分时K线+成交量",
             "累计资金流曲线",
             "资金流热力图",
-            "主力/散户资金流构成",
+            "买卖盘净流构成",
             "买卖盘力度对比",
             "累计涨跌幅",
-            "大单追踪",
+            "显著成交追踪",
         ],
         "price": {
             "open": timeseries.get("open_price"),
@@ -797,10 +819,15 @@ def _build_chart_context(df: pd.DataFrame, analysis: dict, tick_context: Optiona
             "amplitude": timeseries.get("amplitude"),
         },
         "flow": {
-            "large_net": flows.get("large_order_net_inflow"),
-            "retail_net": flows.get("retail_net_inflow"),
-            "total_net": total_net,
-            "large_ratio": flows.get("large_order_ratio"),
+            "buy_amount": buy_amount,
+            "sell_amount": sell_amount,
+            "net_inflow": net_inflow,
+            "buy_count_ratio": flows.get("buy_count_ratio"),
+            "sell_count_ratio": flows.get("sell_count_ratio"),
+            "avg_buy_amount": flows.get("avg_buy_amount"),
+            "avg_sell_amount": flows.get("avg_sell_amount"),
+            "direction_coverage": flows.get("direction_coverage"),
+            "neutral_ratio": flows.get("neutral_ratio"),
             "cum_flow_last": cum_flow_last,
             "quality": flows.get("flow_quality", {}),
         },
@@ -811,7 +838,7 @@ def _build_chart_context(df: pd.DataFrame, analysis: dict, tick_context: Optiona
             "price_vs_vwap": indicators.get("price_vs_vwap"),
         },
         "anomalies": {
-            "large_order_count": anomalies.get("summary", {}).get("large_order_count", 0),
+            "significant_trade_count": anomalies.get("summary", {}).get("large_order_count", 0),
             "price_spike_count": anomalies.get("summary", {}).get("price_spike_count", 0),
             "volume_surge_count": anomalies.get("summary", {}).get("volume_surge_count", 0),
         },
@@ -1124,6 +1151,7 @@ def _build_chart_prompts(chart_context: dict, focus: str, style: str) -> tuple[s
     system_prompt = (
         "你是A股日内图表解读助手，只能围绕交易与金融话题回答。"
         "不要给出买卖指令，只解释图表含义与风险。"
+        "涉及资金流时使用买卖盘、净流入、笔数/均额与显著成交，不使用主力/散户推断。"
     )
     user_prompt = {
         "任务": "解读当前页面图表，不要发散到其他主题",

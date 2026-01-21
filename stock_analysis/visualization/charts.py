@@ -425,7 +425,7 @@ class ChartGenerator:
     @staticmethod
     def create_large_orders_scatter(large_orders: List[Dict], df: pd.DataFrame) -> go.Figure:
         """
-        创建大单散点图（在价格图上标记大单）
+        创建显著成交散点图（在价格图上标记成交峰值）
         """
         fig = go.Figure()
         
@@ -435,11 +435,11 @@ class ChartGenerator:
             y=df['收盘'],
             mode='lines',
             name='价格',
-            line=dict(color='lightgray', width=1),
-            opacity=0.5
+            line=dict(color='#1f2937', width=1.2),
+            opacity=0.8
         ))
         
-        # 大单散点
+        # 显著成交散点
         if large_orders:
             buy_orders = [o for o in large_orders if o.get('type') == '买盘']
             sell_orders = [o for o in large_orders if o.get('type') == '卖盘']
@@ -449,7 +449,7 @@ class ChartGenerator:
                     x=[o['time'] for o in buy_orders],
                     y=[o['price'] for o in buy_orders],
                     mode='markers',
-                    name='大买单',
+                    name='显著买成交',
                     marker=dict(
                         color='#ff4d4f',
                         size=[min(o['ratio'] * 5, 30) for o in buy_orders],
@@ -465,7 +465,7 @@ class ChartGenerator:
                     x=[o['time'] for o in sell_orders],
                     y=[o['price'] for o in sell_orders],
                     mode='markers',
-                    name='大卖单',
+                    name='显著卖成交',
                     marker=dict(
                         color='#52c41a',
                         size=[min(o['ratio'] * 5, 30) for o in sell_orders],
@@ -477,7 +477,7 @@ class ChartGenerator:
                 ))
         
         fig.update_layout(
-            title="大单追踪",
+            title="显著成交追踪",
             height=400,
             hovermode='closest',
             template='plotly_white',
@@ -660,225 +660,175 @@ class ChartGenerator:
     @staticmethod
     def create_stacked_area_flow(df: pd.DataFrame, flow_data: dict, resample_minutes=30) -> go.Figure:
         """
-        创建主力/散户资金流堆叠面积图 (优化版 - 正确的分类逻辑)
-        
+        创建买/卖盘净流构成堆叠面积图
+
         Args:
             df: 包含逐笔数据的DataFrame
             flow_data: 资金流向汇总数据（用于fallback）
             resample_minutes: 聚合窗口(分钟)
         """
         try:
-            # 准备数据
             df_copy = df.copy()
-            
-            # 参数：主力阈值（20万）
-            MAIN_THRESHOLD = 200000
-            
-            # 步骤1: 为每笔成交打上"主力"或"散户"标签
-            def classify_fund(row):
-                amt = row.get('成交额(元)', 0)
-                if amt >= MAIN_THRESHOLD:
-                    return '主力'
-                else:
-                    return '散户'
-            
-            df_copy['资金类型'] = df_copy.apply(classify_fund, axis=1)
-            
-            # 🔍 诊断1: 查看分类结果 & 数据类型判断
-            print("=" * 50)
-            print("📊 资金类型分类统计:")
-            print(df_copy['资金类型'].value_counts())
-            print(f"\n成交额统计:")
-            median_amt = df_copy['成交额(元)'].median()
-            print(f"  最小: ¥{df_copy['成交额(元)'].min():,.2f}")
-            print(f"  最大: ¥{df_copy['成交额(元)'].max():,.2f}")
-            print(f"  均值: ¥{df_copy['成交额(元)'].mean():,.2f}")
-            print(f"  中位数: ¥{median_amt:,.2f}")
-            print(f"  阈值: ¥{MAIN_THRESHOLD:,.0f}")
-            
-            # 判断数据类型
-            is_minute_data = median_amt > 1_000_000  # 中位数>100万，很可能是分钟数据
-            if is_minute_data:
-                print(f"\n⚠️ 检测到分钟级聚合数据（中位数>{median_amt/1e6:.1f}百万）")
-                print("   主力/散户划分改用成交量法（大单占比估算）")
+
+            amount_col = None
+            if "成交额(元)" in df_copy.columns:
+                amount_col = "成交额(元)"
+            elif "成交额" in df_copy.columns:
+                amount_col = "成交额"
+            elif "amount" in df_copy.columns:
+                amount_col = "amount"
+
+            if {"时间", "buy_amount", "sell_amount"}.issubset(df_copy.columns):
+                df_copy["买盘净流入"] = pd.to_numeric(
+                    df_copy["buy_amount"], errors="coerce"
+                ).fillna(0.0)
+                df_copy["卖盘净流出"] = -pd.to_numeric(
+                    df_copy["sell_amount"], errors="coerce"
+                ).fillna(0.0)
             else:
-                print(f"\n✅ 检测到逐笔Tick数据，使用标准20万阈值")
-            print("=" * 50)
-            
-            # 如果是分钟数据，使用不同逻辑
-            if is_minute_data:
-                # 方法：假设每分钟主力占比 = 该分钟成交额/成交量的加权平均价差异
-                # 简化版：用成交量分布估算，大于平均成交量2倍的认为主力主导
-                df_copy['成交量'] = df_copy.get('成交量', df_copy.get('volume', 0))
-                vol_mean = df_copy['成交量'].mean()
-                
-                def classify_by_volume(row):
-                    vol = row.get('成交量', 0)
-                    # 成交量大的时段，主力参与度高
-                    if vol > vol_mean * 1.5:
-                        return '主力'  # 主力主导
-                    else:
-                        return '散户'  # 散户主导
-                
-                df_copy['资金类型'] = df_copy.apply(classify_by_volume, axis=1)
-                print(f"\n重新分类后统计（基于成交量）:")
-                print(df_copy['资金类型'].value_counts())
-            
-            # 步骤2: 计算每笔的资金流（买盘=正，卖盘=负）
-            def calculate_flow(row):
-                amt = row.get('成交额(元)', 0)
-                nature = str(row.get('性质', ''))
-                
-                if '买' in nature:
-                    return amt  # 流入为正
-                elif '卖' in nature:
-                    return -amt  # 流出为负
-                else:  # 中性盘
-                    return 0
-            
-            df_copy['单笔资金流'] = df_copy.apply(calculate_flow, axis=1)
-            
-            # 步骤3: 处理时间以便聚合
-            df_copy['时间'] = pd.to_datetime(df_copy['时间'], format='%H:%M:%S', errors='coerce')
-            df_copy = df_copy.dropna(subset=['时间'])
-            
-            # 设置基准日期
-            base_date = pd.Timestamp('2026-01-01')
-            df_copy['datetime'] = df_copy['时间'].apply(
-                lambda x: base_date + pd.Timedelta(hours=x.hour, minutes=x.minute, seconds=x.second)
+                if amount_col is None or "性质" not in df_copy.columns:
+                    raise KeyError("missing required tick columns")
+
+                amt = pd.to_numeric(df_copy[amount_col], errors="coerce").fillna(0.0)
+                nature = df_copy["性质"].astype(str)
+                buy_mask = nature.str.contains("买")
+                sell_mask = nature.str.contains("卖")
+
+                df_copy["买盘净流入"] = 0.0
+                df_copy["卖盘净流出"] = 0.0
+                df_copy.loc[buy_mask, "买盘净流入"] = amt[buy_mask]
+                df_copy.loc[sell_mask, "卖盘净流出"] = -amt[sell_mask]
+
+            df_copy["时间"] = pd.to_datetime(
+                df_copy["时间"], format="%H:%M:%S", errors="coerce"
             )
-            df_copy = df_copy.set_index('datetime')
-            
-            # 步骤4: 使用透视表，按时间和资金类型聚合
-            flow_pivot = df_copy.pivot_table(
-                index=df_copy.index,
-                columns='资金类型',
-                values='单笔资金流',
-                aggfunc='sum',
-                fill_value=0
+            df_copy = df_copy.dropna(subset=["时间"])
+
+            base_date = pd.Timestamp("2026-01-01")
+            df_copy["datetime"] = df_copy["时间"].apply(
+                lambda x: base_date
+                + pd.Timedelta(hours=x.hour, minutes=x.minute, seconds=x.second)
             )
-            
-            # 确保两列都存在
-            if '主力' not in flow_pivot.columns:
-                flow_pivot['主力'] = 0
-            if '散户' not in flow_pivot.columns:
-                flow_pivot['散户'] = 0
-            
-            # 步骤5: 重采样到指定时间窗口（如30分钟）
-            flow_agg = flow_pivot[['主力', '散户']].resample(f'{resample_minutes}min').sum()
+            df_copy = df_copy.set_index("datetime")
+
+            flow_agg = df_copy[["买盘净流入", "卖盘净流出"]].resample(
+                f"{resample_minutes}min"
+            ).sum()
             flow_agg = flow_agg.reset_index()
-            flow_agg['时段'] = flow_agg['datetime'].dt.strftime('%H:%M')
-            flow_agg['总计净流入'] = flow_agg['主力'] + flow_agg['散户']
-            
-            # 调试信息（可以在日志中查看）
-            print(f"主力总净流入: {flow_agg['主力'].sum():,.0f}")
-            print(f"散户总净流入: {flow_agg['散户'].sum():,.0f}")
-            print(f"数据点数: {len(flow_agg)}")
-            
-            # 步骤6: 绘制堆叠面积图
+            flow_agg["时段"] = flow_agg["datetime"].dt.strftime("%H:%M")
+            flow_agg["总计净流入"] = flow_agg["买盘净流入"] + flow_agg["卖盘净流出"]
+
             fig = go.Figure()
-            
-            # 主力面积
-            fig.add_trace(go.Scatter(
-                x=flow_agg['时段'],
-                y=flow_agg['主力'],
-                mode='none',
-                stackgroup='one',
-                name='主力资金',
-                fillcolor='rgba(255, 77, 79, 0.6)',
-                hovertemplate='主力: ¥%{y:,.0f}<extra></extra>'
-            ))
-            
-            # 散户面积
-            fig.add_trace(go.Scatter(
-                x=flow_agg['时段'],
-                y=flow_agg['散户'],
-                mode='none',
-                stackgroup='one',
-                name='散户资金',
-                fillcolor='rgba(82, 196, 26, 0.6)',
-                hovertemplate='散户: ¥%{y:,.0f}<extra></extra>'
-            ))
-            
-            # 总计趋势线（改为虚线以区分）
-            fig.add_trace(go.Scatter(
-                x=flow_agg['时段'],
-                y=flow_agg['总计净流入'],
-                mode='lines',
-                line=dict(color='#1890ff', width=2, dash='dash'),  # 虚线
-                name='总计净流入',
-                hovertemplate='总计: ¥%{y:,.0f}<extra></extra>'
-            ))
-            
-            # 🎯 智能标注：找出主力与散户背离最大的时刻
-            flow_agg['背离度'] = abs(flow_agg['主力'] - flow_agg['散户'])
-            max_divergence_idx = flow_agg['背离度'].idxmax()
-            max_div_row = flow_agg.loc[max_divergence_idx]
-            
-            # 判断背离类型
-            if max_div_row['主力'] > 0 and max_div_row['散户'] < 0:
-                annotation_text = "⬆️ 主力吸筹<br>散户抛售"
-                arrow_color = "#ff4d4f"
-            elif max_div_row['主力'] < 0 and max_div_row['散户'] > 0:
-                annotation_text = "⬇️ 主力撤退<br>散户接盘"
-                arrow_color = "#52c41a"
-            else:
-                annotation_text = "⚠️ 最大背离"
-                arrow_color = "#faad14"
-            
-            # 添加标注
-            fig.add_annotation(
-                x=max_div_row['时段'],
-                y=max_div_row['总计净流入'],
-                text=annotation_text,
-                showarrow=True,
-                arrowhead=2,
-                arrowsize=1,
-                arrowwidth=2,
-                arrowcolor=arrow_color,
-                ax=0,
-                ay=-60,
-                bgcolor="white",
-                bordercolor=arrow_color,
-                borderwidth=2,
-                font=dict(size=10, color=arrow_color)
+
+            fig.add_trace(
+                go.Scatter(
+                    x=flow_agg["时段"],
+                    y=flow_agg["买盘净流入"],
+                    mode="none",
+                    fill="tozeroy",
+                    name="买盘净流入",
+                    fillcolor="rgba(255, 77, 79, 0.6)",
+                    hovertemplate="买盘净流入: ¥%{y:,.0f}<extra></extra>",
+                )
             )
-            
-            # 🎯 动态Y轴：根据数据范围自动调整
-            y_min = min(flow_agg[['主力', '散户', '总计净流入']].min().min(), 0)
-            y_max = max(flow_agg[['主力', '散户', '总计净流入']].max().max(), 0)
-            
-            # 留出10%的padding
-            y_range_padding = (y_max - y_min) * 0.1
+
+            fig.add_trace(
+                go.Scatter(
+                    x=flow_agg["时段"],
+                    y=flow_agg["卖盘净流出"],
+                    mode="none",
+                    fill="tozeroy",
+                    name="卖盘净流出",
+                    fillcolor="rgba(82, 196, 26, 0.6)",
+                    hovertemplate="卖盘净流出: ¥%{y:,.0f}<extra></extra>",
+                )
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=flow_agg["时段"],
+                    y=flow_agg["总计净流入"],
+                    mode="lines",
+                    line=dict(color="#1890ff", width=2, dash="dash"),
+                    name="总计净流入",
+                    hovertemplate="总计净流入: ¥%{y:,.0f}<extra></extra>",
+                )
+            )
+
+            max_abs = flow_agg["总计净流入"].abs().max() if not flow_agg.empty else 0
+            if max_abs > 0:
+                max_idx = flow_agg["总计净流入"].abs().idxmax()
+                max_row = flow_agg.loc[max_idx]
+                if max_row["总计净流入"] > 0:
+                    annotation_text = "⬆️ 净流入峰值"
+                    arrow_color = "#ff4d4f"
+                else:
+                    annotation_text = "⬇️ 净流出峰值"
+                    arrow_color = "#52c41a"
+
+                fig.add_annotation(
+                    x=max_row["时段"],
+                    y=max_row["总计净流入"],
+                    text=annotation_text,
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowsize=1,
+                    arrowwidth=2,
+                    arrowcolor=arrow_color,
+                    ax=0,
+                    ay=-60,
+                    bgcolor="white",
+                    bordercolor=arrow_color,
+                    borderwidth=2,
+                    font=dict(size=10, color=arrow_color),
+                )
+
+            y_min = min(
+                flow_agg[["买盘净流入", "卖盘净流出", "总计净流入"]].min().min(), 0
+            )
+            y_max = max(
+                flow_agg[["买盘净流入", "卖盘净流出", "总计净流入"]].max().max(), 0
+            )
+            y_range_padding = max((y_max - y_min) * 0.1, 1)
             y_axis_range = [y_min - y_range_padding, y_max + y_range_padding]
-            
+
             fig.update_layout(
-                title=f"主力/散户资金流构成 ({resample_minutes}分钟, 阈值≥{MAIN_THRESHOLD/10000:.0f}万)",
+                title=f"买卖盘净流构成 ({resample_minutes}分钟)",
                 height=400,
-                template='plotly_white',
+                template="plotly_white",
                 yaxis_title="净流入 (元)",
-                yaxis_range=y_axis_range,  # 动态Y轴范围
+                yaxis_range=y_axis_range,
                 xaxis_title="时段",
-                hovermode='x unified',
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             )
-            
-            # 添加零线
+
             fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
-            
+
             return fig
-            
+
         except Exception as e:
             print(f"堆叠面积图生成失败: {e}")
-            # Fallback: 简单瀑布图
-            fig = go.Figure(go.Waterfall(
-                name="资金流向",
-                x=["主力", "散户", "总计"],
-                y=[flow_data.get('large_order_net_inflow', 0), 
-                   flow_data.get('retail_net_inflow', 0), 0],
-                measure=["relative", "relative", "total"],
-                increasing={"marker": {"color": "#ff4d4f"}},
-                decreasing={"marker": {"color": "#52c41a"}},
-            ))
+            buy_amount = flow_data.get("buy_amount")
+            sell_amount = flow_data.get("sell_amount")
+            if buy_amount is None:
+                buy_amount = flow_data.get("large_buy_amount", 0) + flow_data.get(
+                    "retail_buy_amount", 0
+                )
+            if sell_amount is None:
+                sell_amount = flow_data.get("large_sell_amount", 0) + flow_data.get(
+                    "retail_sell_amount", 0
+                )
+            net_inflow = flow_data.get("net_inflow", buy_amount - sell_amount)
+            fig = go.Figure(
+                go.Waterfall(
+                    name="资金流向",
+                    x=["买盘", "卖盘", "总计"],
+                    y=[buy_amount, -sell_amount, net_inflow],
+                    measure=["relative", "relative", "total"],
+                    increasing={"marker": {"color": "#ff4d4f"}},
+                    decreasing={"marker": {"color": "#52c41a"}},
+                )
+            )
             fig.update_layout(title="资金流向(Fallback)", height=400)
             return fig

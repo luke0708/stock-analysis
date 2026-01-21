@@ -209,6 +209,8 @@ def _build_daily_trend(daily_df: pd.DataFrame, limit: int) -> Dict:
 
     close_first = df_tail["收盘"].iloc[0]
     close_last = df_tail["收盘"].iloc[-1]
+    last_date = df_tail[date_col].iloc[-1]
+    last_date_str = last_date.strftime("%Y-%m-%d") if pd.notna(last_date) else None
     return_pct = (
         (close_last / close_first - 1) * 100
         if pd.notna(close_first) and close_first != 0
@@ -284,6 +286,7 @@ def _build_daily_trend(daily_df: pd.DataFrame, limit: int) -> Dict:
 
     return {
         "window_days": available_days,
+        "last_date": last_date_str,
         "close_last": _safe_number(close_last),
         "return_pct": _safe_number(return_pct),
         "volatility_pct": _safe_number(daily_volatility),
@@ -503,8 +506,10 @@ def _build_readable_summary(
         rel_ma5 = _bool_to_cn(daily_trend.get("is_above_ma5"))
         rel_ma10 = _bool_to_cn(daily_trend.get("is_above_ma10"))
         rel_ma20 = _bool_to_cn(daily_trend.get("is_above_ma20"))
+        last_date = daily_trend.get("last_date")
+        date_label = f"{last_date}日线收盘" if last_date else "日线收盘"
         trend_texts.append(
-            f"收盘价 {close_last}，位于 MA5 {ma5}({rel_ma5})、MA10 {ma10}({rel_ma10})、MA20 {ma20}({rel_ma20})"
+            f"{date_label} {close_last}，位于 MA5({ma5}){rel_ma5}、MA10({ma10}){rel_ma10}、MA20({ma20}){rel_ma20}"
         )
         ma5_dev = _format_pct(daily_trend.get("close_vs_ma5_pct"))
         ma10_dev = _format_pct(daily_trend.get("close_vs_ma10_pct"))
@@ -738,7 +743,7 @@ def show_global_markets():
 
 def show_ai_analysis():
     st.header("🤖 AI 智能投顾")
-    st.caption("专注于A股资金流向与日内交易解读，输出为结构化结论")
+    st.caption("专注于A股资金流向、日内异动与短期趋势解读，输出为结构化结论")
 
     api_key, api_key_name = get_deepseek_key()
     if not api_key:
@@ -1362,53 +1367,57 @@ def _build_prompts(
 ) -> Tuple[str, str]:
     constraints = []
     if advice_mode == "分析模式":
-        constraints.append("不输出行动建议，仅做分析")
+        constraints.append("操作建议：仅做分析，不输出具体操作指令")
     elif advice_mode == "结论模式":
-        constraints.append("可给出方向性结论，但不给直接操作指令")
+        constraints.append("操作建议：可给出方向性结论，但不给直接操作指令")
     else:
-        constraints.append("允许给出条件触发建议，不做收益承诺")
+        constraints.append("操作建议：允许给出条件触发建议，不做收益承诺")
+    constraints.append("输出分两块：事实描述(按规则，不推断) + 自由分析(可跨日推演，不受事实规则限制)")
     if only_data:
-        constraints.append("仅基于提供的数据进行判断，不要编造")
+        constraints.append("事实描述：仅基于提供的数据，不要编造")
     if highlight_numbers:
-        constraints.append("必须引用关键数值作为依据")
+        constraints.append("事实描述：必须引用关键数值作为依据")
     if add_watchlist:
-        constraints.append("给出可观察的触发条件或关键变量")
-    constraints.append("引用数值时不要输出字段名或 JSON 路径，改用自然语言表述")
+        constraints.append("自由分析：给出可观察的触发条件或关键变量")
+    constraints.append("事实描述：引用数值时不要输出字段名或 JSON 路径，改用自然语言表述")
     if context.get("readable_summary"):
-        constraints.append("优先使用 readable_summary 的表述与数值")
-    constraints.append("必须引用 daily_trend 或 daily_series 的关键数值作为趋势依据（可通过 readable_summary）")
+        constraints.append("事实描述：优先使用 readable_summary 的表述与数值")
+    constraints.append("事实描述：若为盘中快照，价格表述用“盘中最新价/截至时间”，不要称“当日收盘”")
+    constraints.append("事实描述：均线高低关系基于日线收盘口径，不与盘中价格混用")
+    constraints.append("事实描述：若 daily_trend.last_date 存在，日线口径需标注该日期")
+    constraints.append("事实描述：提到 MA/VWAP/ATR/区间时需带上数值（如 MA5(71.89)）")
+    constraints.append("自由分析：可结合 daily_trend/daily_series 与当日资金变化做短期推演")
+    constraints.append("自由分析：涉及操作建议需说明A股T+1，新开仓当天不可卖出")
     if not context.get("daily_series"):
-        constraints.append("若日线数据为空，需明确说明趋势依据不足")
+        constraints.append("事实描述：若日线数据为空，需明确说明趋势依据不足")
     if context.get("today_partial", {}).get("scope", {}).get("is_partial"):
-        constraints.append("today_partial 为盘中快照，不能与日线量能直接对比")
+        constraints.append("事实描述：today_partial 为盘中快照，不能与日线量能直接对比")
     flow_quality = context.get("flow", {}).get("quality", {})
     if flow_quality.get("direction_reliability") == "low" or flow_quality.get("limit_lock"):
-        constraints.append("买卖盘方向可靠性偏低，避免给出明确买卖方向结论，仅描述成交节奏与量能")
+        constraints.append("事实描述：买卖盘方向可靠性偏低，优先描述成交节奏与量能")
     if context.get("daily_trend"):
         constraints.append(
-            "均线高低关系必须使用 daily_trend 中已计算的高低关系与偏离百分比，"
+            "事实描述：均线高低关系必须使用 daily_trend 中已计算的高低关系与偏离百分比，"
             "不要自行比较均线数值"
         )
-    if context.get("flow"):
-        constraints.append("资金流解读优先使用买卖笔数占比与单笔均额，避免推断主力/散户")
     if context.get("flow", {}).get("direction_coverage") is not None:
-        constraints.append("若方向覆盖率偏低，需说明买卖盘无法覆盖全部成交额")
+        constraints.append("事实描述：若方向覆盖率偏低，需说明买卖盘无法覆盖全部成交额")
     if context.get("readable_summary", {}).get("anomalies"):
-        constraints.append("关键异动需逐条引用 readable_summary.anomalies 中的条目，不要凭空推断原因如对敲/承接")
+        constraints.append("事实描述：关键异动需逐条引用 readable_summary.anomalies 中的条目")
     if context.get("largest_trades_raw"):
-        constraints.append("largest_trades_raw 为全天原始成交额最大榜单，包含中性盘，不代表方向强弱")
+        constraints.append("事实描述：largest_trades_raw 为全天原始成交额最大榜单，包含中性盘，不代表方向强弱")
     if preset_mode == "range":
-        constraints.append("必须使用 price_range_analysis 给出区间，并注明所用方法")
-        constraints.append("若方法区间不一致，需说明分歧与共识区间")
-        constraints.append("如有 consensus_view，优先给出共识区间，再说明方法差异")
+        constraints.append("事实描述：价格区间必须使用 price_range_analysis 给出，并注明方法")
+        constraints.append("事实描述：若方法区间不一致，需说明分歧与共识区间")
+        constraints.append("事实描述：如有 consensus_view，优先给出共识区间，再说明方法差异")
         if not context.get("price_range_analysis"):
-            constraints.append("价格区间数据缺失时，明确说明无法给出区间")
+            constraints.append("事实描述：价格区间数据缺失时，明确说明无法给出区间")
     news_payload = context.get("news")
     if news_payload is not None:
         if news_payload.get("has_news"):
-            constraints.append("如有新闻条目，仅基于新闻内容推断潜在影响，避免夸大")
+            constraints.append("事实描述：如有新闻条目，仅基于新闻内容描述潜在影响")
         else:
-            constraints.append("若未提供新闻数据需明确说明无法判断新闻影响")
+            constraints.append("事实描述：若未提供新闻数据需明确说明无法判断新闻影响")
 
     style_map = {
         "简洁": "4-6条要点，句子短",
@@ -1445,14 +1454,9 @@ def _build_prompts(
     )
 
     output_format = [
-        "趋势依据(日线/均线/回撤/量能等)",
-        "盘中依据(资金流/节奏/异动等)",
-        "结论(方向与强弱)",
-        "风险/不确定性",
-        "条件触发建议(若/则，不做收益承诺)",
+        "事实描述(行情与数据，按规则，不推断)",
+        "自由分析(可跨日推演，结合短期/中期节奏给出框架)",
     ]
-    if preset_mode == "range":
-        output_format.insert(1, "价格区间建议(注明方法与区间)")
 
     user_prompt = {
         "分析目标": focus,
@@ -1537,8 +1541,9 @@ def _build_followup_prompt(
         "数据快照": context,
         "输出要求": [
             "直接回答问题",
-            "引用关键数据",
-            "不扩展到无关话题"
+            "事实描述引用关键数据",
+            "不扩展到无关话题",
+            "保持两块结构：事实描述 + 自由分析"
         ],
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)

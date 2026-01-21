@@ -2,12 +2,34 @@
 板块热点分析器
 分析今日热门板块、领涨股、板块资金流向
 """
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+
 import akshare as ak
 import pandas as pd
-from typing import Dict, List
+
+_logger = logging.getLogger(__name__)
+_SENTIMENT_CACHE: Dict = {}
+_SENTIMENT_CACHE_TS: Optional[datetime] = None
+_SENTIMENT_CACHE_TTL = timedelta(minutes=10)
 
 class MarketHotspotAnalyzer:
     """市场热点分析器"""
+
+    @staticmethod
+    def _get_cached_sentiment() -> Dict:
+        if not _SENTIMENT_CACHE or _SENTIMENT_CACHE_TS is None:
+            return {}
+        if datetime.now() - _SENTIMENT_CACHE_TS > _SENTIMENT_CACHE_TTL:
+            return {}
+        return dict(_SENTIMENT_CACHE)
+
+    @staticmethod
+    def _set_cached_sentiment(payload: Dict) -> None:
+        global _SENTIMENT_CACHE, _SENTIMENT_CACHE_TS
+        _SENTIMENT_CACHE = dict(payload)
+        _SENTIMENT_CACHE_TS = datetime.now()
     
     @staticmethod
     def get_hot_concepts(top_n=10) -> pd.DataFrame:
@@ -185,27 +207,33 @@ class MarketHotspotAnalyzer:
         """
         try:
             df = ak.stock_zh_a_spot_em()
-            
+
             total = len(df)
-            rising = len(df[df['涨跌幅'] > 0])
-            falling = len(df[df['涨跌幅'] < 0])
+            rising = len(df[df["涨跌幅"] > 0])
+            falling = len(df[df["涨跌幅"] < 0])
             flat = total - rising - falling
-            
-            limit_up = len(df[df['涨跌幅'] >= 9.9])  # 涨停
-            limit_down = len(df[df['涨跌幅'] <= -9.9])  # 跌停
-            
-            return {
-                'total_stocks': total,
-                'rising_count': rising,
-                'falling_count': falling,
-                'flat_count': flat,
-                'rising_ratio': rising / total * 100,
-                'limit_up_count': limit_up,
-                'limit_down_count': limit_down,
-                'market_sentiment': '多头' if rising > falling else ('空头' if falling > rising else '平衡')
+
+            limit_up = len(df[df["涨跌幅"] >= 9.9])  # 涨停
+            limit_down = len(df[df["涨跌幅"] <= -9.9])  # 跌停
+
+            payload = {
+                "total_stocks": total,
+                "rising_count": rising,
+                "falling_count": falling,
+                "flat_count": flat,
+                "rising_ratio": rising / total * 100,
+                "limit_up_count": limit_up,
+                "limit_down_count": limit_down,
+                "market_sentiment": "多头" if rising > falling else ("空头" if falling > rising else "平衡"),
             }
+            MarketHotspotAnalyzer._set_cached_sentiment(payload)
+            return payload
         except Exception as e:
-            print(f"分析市场情绪失败: {e}")
+            cached = MarketHotspotAnalyzer._get_cached_sentiment()
+            if cached:
+                _logger.warning("分析市场情绪失败，回退缓存: %s", e)
+                return cached
+            _logger.warning("分析市场情绪失败: %s", e)
             return {}
 
 
