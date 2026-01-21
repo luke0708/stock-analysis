@@ -262,17 +262,29 @@ class TickDataCleaner:
         afternoon_mask = (time_str >= "13:00") & (time_str <= "15:00")
         df_clean = df_clean[morning_mask | afternoon_mask]
 
+        close_auction_df = pd.DataFrame()
         if not df_clean.empty:
             # 1. 严格过滤 15:00:00 之后的数据 (盘后固定价格交易等)
-            # 注意：这里保留 15:00:00 本身(收盘竞价)，但剔除 15:00:01 及以后
-            # 有些数据源收盘竞价时间可能是 15:00:00
-            closing_time = df_clean["时间"].dt.normalize() + pd.Timedelta(hours=15)
-            # 使用 mask 过滤，保留 时间 <= 15:00:00 的数据（在下午时段）
             valid_time_mask = (
-                (df_clean["时间"].dt.hour < 15) | 
-                ((df_clean["时间"].dt.hour == 15) & (df_clean["时间"].dt.minute == 0) & (df_clean["时间"].dt.second == 0))
+                (df_clean["时间"].dt.hour < 15)
+                | (
+                    (df_clean["时间"].dt.hour == 15)
+                    & (df_clean["时间"].dt.minute == 0)
+                    & (df_clean["时间"].dt.second == 0)
+                )
             )
             df_clean = df_clean[valid_time_mask]
+
+            # 2. 15:00:00 收盘集合竞价单独分离，不纳入主 tick 计算
+            close_auction_mask = (
+                (df_clean["时间"].dt.hour == 15)
+                & (df_clean["时间"].dt.minute == 0)
+                & (df_clean["时间"].dt.second == 0)
+            )
+            if close_auction_mask.any():
+                close_auction_df = df_clean[close_auction_mask].copy()
+                df_clean = df_clean[~close_auction_mask]
+                quality_flags.append("close_auction_separated")
 
 
         if df_clean.empty:
@@ -283,4 +295,10 @@ class TickDataCleaner:
             df_clean["是否极端跳变"] = df_clean["价格变化率"] > 5.0
 
         logger.info("Tick数据清洗完成: %s rows", len(df_clean))
-        return df_clean.reset_index(drop=True), quality_flags, auction_df.reset_index(drop=True), inferred_ratio
+        return (
+            df_clean.reset_index(drop=True),
+            quality_flags,
+            auction_df.reset_index(drop=True),
+            close_auction_df.reset_index(drop=True),
+            inferred_ratio,
+        )

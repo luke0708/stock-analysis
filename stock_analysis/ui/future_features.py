@@ -339,6 +339,7 @@ def _build_tick_window_series(tick_context: Dict, limit: int) -> Tuple[List[Dict
                 "turnover": _safe_number(row.get("turnover")),
                 "ofi": _safe_number(row.get("ofi")),
                 "trade_count": _safe_number(row.get("trade_count")),
+                "large_order_count": _safe_number(row.get("large_order_count")),
                 "range_pct": _safe_number(row.get("range_pct")),
             }
         )
@@ -1006,7 +1007,8 @@ def show_ai_analysis():
                     api_key=api_key,
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
-                    temperature=temperature
+                    temperature=temperature,
+                    max_tokens=1200,
                 )
                 entry = {
                     "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1080,7 +1082,8 @@ def show_ai_analysis():
                             api_key=api_key,
                             system_prompt=st.session_state.ai_last["system_prompt"],
                             user_prompt=follow_prompt,
-                            temperature=st.session_state.ai_last.get("temperature", 0.2)
+                            temperature=st.session_state.ai_last.get("temperature", 0.2),
+                            max_tokens=1200,
                         )
                         st.session_state.ai_last["followups"].append(
                             {
@@ -1366,6 +1369,9 @@ def _build_context(
             "burst_windows": tick_context.get("burst_windows", []),
             "anomaly_notes": tick_context.get("anomaly_notes", []),
             "auction_summary": tick_context.get("auction_summary", {}),
+            "auction_trades": tick_context.get("auction_trades", []),
+            "close_auction_summary": tick_context.get("close_auction_summary", {}),
+            "close_auction_trades": tick_context.get("close_auction_trades", []),
             "volume_unit": tick_context.get("volume_unit"),
             "inferred_ratio": tick_context.get("inferred_ratio"),
         }

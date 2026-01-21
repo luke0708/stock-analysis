@@ -158,11 +158,14 @@ def _convert_tick_to_minute(df_tick: pd.DataFrame, analysis_date) -> tuple[pd.Da
         analysis_day = datetime.now().date()
 
     cleaner = TickDataCleaner()
-    clean_df, quality_flags, _, _ = cleaner.clean(df_tick, analysis_day)
+    clean_df, quality_flags, _, close_auction_df, _ = cleaner.clean(df_tick, analysis_day)
     if clean_df.empty:
         return pd.DataFrame(), ["tick_clean_empty"]
 
     tick_df = clean_df.copy()
+    if close_auction_df is not None and not close_auction_df.empty:
+        tick_df = pd.concat([tick_df, close_auction_df], ignore_index=True)
+        tick_df = tick_df.sort_values("时间")
     tick_df["分钟"] = tick_df["时间"].dt.floor("min")
     grouped = tick_df.groupby("分钟", sort=True)
 
@@ -353,12 +356,16 @@ def display_results(stock_code, analysis_date):
         f"最后更新: {current_time} | {date_note} | 分析对象: {stock_code} {name} | 数据源: {source_note} | 质量: {quality['quality_score']:.0f}/100"
     )
 
-    if tick_context and tick_context.get("auction_df") is not None:
-        if not tick_context["auction_df"].empty:
+    if tick_context:
+        open_auction_df = tick_context.get("auction_df")
+        close_auction_df = tick_context.get("close_auction_df")
+        has_open_auction = open_auction_df is not None and not open_auction_df.empty
+        has_close_auction = close_auction_df is not None and not close_auction_df.empty
+        if has_open_auction or has_close_auction:
             show_auction = st.toggle(
                 "显示集合竞价",
                 value=False,
-                help="默认不纳入主图表，开启后会在资金流图中显示集合竞价标记。",
+                help="默认不纳入主图表，开启后会在资金流图中显示集合竞价(含收盘集合竞价)。",
             )
 
     tick_window_1m = tick_context.get("window_1m") if tick_context else None
@@ -369,13 +376,21 @@ def display_results(stock_code, analysis_date):
 
     if show_auction and tick_context:
         auction_processed = tick_context.get("auction_processed_df")
+        close_auction_processed = tick_context.get("close_auction_processed_df")
         if (
-            auction_processed is not None
-            and not auction_processed.empty
-            and tick_clean_df is not None
+            tick_clean_df is not None
             and not tick_clean_df.empty
+            and (
+                (auction_processed is not None and not auction_processed.empty)
+                or (close_auction_processed is not None and not close_auction_processed.empty)
+            )
         ):
-            combined_df = pd.concat([tick_clean_df, auction_processed], ignore_index=True)
+            frames = [tick_clean_df]
+            if auction_processed is not None and not auction_processed.empty:
+                frames.append(auction_processed)
+            if close_auction_processed is not None and not close_auction_processed.empty:
+                frames.append(close_auction_processed)
+            combined_df = pd.concat(frames, ignore_index=True)
             combined_df = combined_df.sort_values("时间")
             windows = TickAggregator().aggregate(combined_df, windows=[1, 5, 10])
             tick_window_1m = windows.get(1, tick_window_1m)
@@ -501,6 +516,25 @@ def display_results(stock_code, analysis_date):
             "time": tick_context.get("auction_time"),
             "value": marker_value,
             "label": "集合竞价",
+        }
+    if show_auction and tick_context and tick_context.get("close_auction_time"):
+        close_marker_value = 0.0
+        if not df_chart.empty and "累计净流入" in df_chart.columns:
+            close_marker_value = float(df_chart["累计净流入"].iloc[-1])
+        close_processed = tick_context.get("close_auction_processed_df")
+        close_net_inflow = None
+        close_turnover = None
+        if close_processed is not None and not close_processed.empty:
+            if "净流入额" in close_processed.columns:
+                close_net_inflow = float(close_processed["净流入额"].sum())
+            if "成交额(元)" in close_processed.columns:
+                close_turnover = float(close_processed["成交额(元)"].sum())
+        df_chart.attrs["close_auction_marker"] = {
+            "time": tick_context.get("close_auction_time"),
+            "value": close_marker_value,
+            "label": "收盘集合竞价",
+            "net_inflow": close_net_inflow,
+            "turnover": close_turnover,
         }
 
     col_a1, col_a2 = st.columns(2)
@@ -882,7 +916,7 @@ def _build_tick_context(raw_df: pd.DataFrame, analysis_date, allow_imported: boo
     logger.info("=" * 60)
 
     cleaner = TickDataCleaner()
-    clean_df, quality_flags, auction_df, inferred_ratio = cleaner.clean(raw_df, analysis_day)
+    clean_df, quality_flags, auction_df, close_auction_df, inferred_ratio = cleaner.clean(raw_df, analysis_day)
     if clean_df.empty:
         logger.error("❌ clean_df 为空，清洗失败")
         return None
@@ -939,6 +973,10 @@ def _build_tick_context(raw_df: pd.DataFrame, analysis_date, allow_imported: boo
     if auction_df is not None and not auction_df.empty:
         auction_flow = flow_analyzer.analyze(auction_df)
         auction_processed_df = auction_flow.get("processed_df", auction_df)
+    close_auction_processed_df = pd.DataFrame()
+    if close_auction_df is not None and not close_auction_df.empty:
+        close_auction_flow = flow_analyzer.analyze(close_auction_df)
+        close_auction_processed_df = close_auction_flow.get("processed_df", close_auction_df)
 
     aggregator = TickAggregator()
     windows = aggregator.aggregate(processed_df, windows=[1, 5, 10])
@@ -1079,6 +1117,40 @@ def _build_tick_context(raw_df: pd.DataFrame, analysis_date, allow_imported: boo
         "open_gap_available": False,
         "auction_time": str(auction_time) if auction_time is not None else "",
     }
+    auction_trades = []
+    if not auction_df.empty and "成交额(元)" in auction_df.columns:
+        auction_top = auction_df.sort_values("成交额(元)", ascending=False).head(5)
+        for _, row in auction_top.iterrows():
+            auction_trades.append(
+                {
+                    "time": row.get("时间"),
+                    "amount": float(row.get("成交额(元)", 0)),
+                    "amount_1e8": float(row.get("成交额(元)", 0)) / 1e8,
+                    "price": float(row.get("成交价格", row.get("收盘", 0))),
+                    "direction": row.get("性质", "中性盘"),
+                }
+            )
+    close_auction_time = None
+    if not close_auction_df.empty and "时间" in close_auction_df.columns:
+        close_auction_time = close_auction_df["时间"].max()
+    close_auction_summary = {
+        "auction_volume": float(close_auction_df["成交量"].sum()) if not close_auction_df.empty else 0.0,
+        "auction_amount": float(close_auction_df["成交额(元)"].sum()) if not close_auction_df.empty else 0.0,
+        "auction_time": str(close_auction_time) if close_auction_time is not None else "",
+    }
+    close_auction_trades = []
+    if not close_auction_df.empty and "成交额(元)" in close_auction_df.columns:
+        close_top = close_auction_df.sort_values("成交额(元)", ascending=False).head(5)
+        for _, row in close_top.iterrows():
+            close_auction_trades.append(
+                {
+                    "time": row.get("时间"),
+                    "amount": float(row.get("成交额(元)", 0)),
+                    "amount_1e8": float(row.get("成交额(元)", 0)) / 1e8,
+                    "price": float(row.get("成交价格", row.get("收盘", 0))),
+                    "direction": row.get("性质", "中性盘"),
+                }
+            )
 
     base_window_df = window_5m if not window_5m.empty else window_1m
     tick_ai_summary = {}
@@ -1118,6 +1190,7 @@ def _build_tick_context(raw_df: pd.DataFrame, analysis_date, allow_imported: boo
                 "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             },
             "auction_summary": auction_summary,
+            "close_auction_summary": close_auction_summary,
         }
 
     return {
@@ -1131,8 +1204,14 @@ def _build_tick_context(raw_df: pd.DataFrame, analysis_date, allow_imported: boo
         "ofi_display_df": ofi_display_df,
         "auction_df": auction_df,
         "auction_processed_df": auction_processed_df,
+        "close_auction_processed_df": close_auction_processed_df,
         "auction_summary": auction_summary,
         "auction_time": auction_time,
+        "auction_trades": auction_trades,
+        "close_auction_df": close_auction_df,
+        "close_auction_summary": close_auction_summary,
+        "close_auction_time": close_auction_time,
+        "close_auction_trades": close_auction_trades,
         "tick_ai_summary": tick_ai_summary,
         "volume_unit": volume_unit,
         "inferred_ratio": inferred_ratio,

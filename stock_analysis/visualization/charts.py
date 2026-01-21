@@ -576,9 +576,32 @@ class ChartGenerator:
             
             # 步骤4: 计算资金流比率（归一化，可比性强）
             heatmap_data['资金流比率'] = heatmap_data['净流入额'] / heatmap_data['成交额(元)'].replace(0, 1)
-            
+
             # 格式化时段标签
             heatmap_data['时段'] = heatmap_data['时间窗口'].dt.strftime('%H:%M')
+
+            close_marker = df.attrs.get("close_auction_marker")
+            close_label = None
+            if close_marker and close_marker.get("time"):
+                marker_time = pd.to_datetime(close_marker.get("time"), errors="coerce")
+                if pd.notna(marker_time):
+                    time_window = marker_time.floor(f"{resample_minutes}min")
+                    close_label = time_window.strftime("%H:%M")
+                    if close_label not in heatmap_data["时段"].values:
+                        net_inflow = close_marker.get("net_inflow", 0.0) or 0.0
+                        turnover = close_marker.get("turnover", 0.0) or 0.0
+                        ratio = net_inflow / (turnover if turnover else 1)
+                        extra_row = {
+                            "时间窗口": time_window,
+                            "净流入额": net_inflow,
+                            "成交额(元)": turnover,
+                            "资金流比率": ratio,
+                            "时段": close_label,
+                        }
+                        heatmap_data = pd.concat(
+                            [heatmap_data, pd.DataFrame([extra_row])],
+                            ignore_index=True,
+                        ).sort_values("时间窗口")
             
             # 步骤5: 绘制专业热力图（使用go.Heatmap）
             # 计算合理的色阶范围（使用95分位数避免极值）
@@ -624,6 +647,18 @@ class ChartGenerator:
                     "<extra></extra>"
                 ])
             ))
+
+            if close_label:
+                fig.add_annotation(
+                    x=close_label,
+                    y=0,
+                    text="集合竞价",
+                    showarrow=True,
+                    arrowhead=2,
+                    ax=0,
+                    ay=-30,
+                    font=dict(color="#faad14", size=10),
+                )
             
             # 调整布局
             fig.update_layout(
