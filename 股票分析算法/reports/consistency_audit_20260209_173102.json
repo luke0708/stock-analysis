@@ -1,0 +1,35 @@
+{
+  "summary": {
+    "generated_at": "2026-02-09T17:31:39",
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "pass_rate": 100.0,
+    "report_type": "simple",
+    "timeout": 900,
+    "codes": [
+      "601899"
+    ],
+    "db_path": "/Users/wangluke/Localprojects/读取股票当天数据/data/consistency_audit_20260209_173102.db"
+  },
+  "rows": [
+    {
+      "stock_code": "601899",
+      "report_type": "simple",
+      "job_id": "5eeaaaf272ce4dde98221caac30521be",
+      "query_id": "beta_601899_7d44d6e13ca0",
+      "job_status": "succeeded",
+      "audit_status": "passed",
+      "full_equal": true,
+      "mismatch_count": 0,
+      "mismatch_fields": "",
+      "beta_error": "",
+      "original_error": "",
+      "duration_ms": 36307,
+      "sentiment_score": 45,
+      "operation_advice": "观望",
+      "trend_prediction": "震荡",
+      "confidence_level": "中"
+    }
+  ]
+}

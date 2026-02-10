@@ -17,8 +17,9 @@ from stock_analysis.ui.market_page import show_market_page
 from stock_analysis.ui.watchlist_page import show_watchlist_page
 from stock_analysis.ui.future_features import (
     show_backtesting,
-    show_ai_analysis
+    show_ai_analysis,
 )
+from stock_analysis.ui.beta_task_page import show_ai_decision_panel_beta_task
 from stock_analysis.ui.global_markets_page import show_global_markets
 from stock_analysis.ui.comparison_page import show_comparison_page
 from stock_analysis.ui.alert_page import show_alert_page
@@ -85,7 +86,8 @@ def main():
                 "🔔 实时预警",
                 "📋 我的自选股",
                 "⚖️ 多股对比 (Pro)",
-                "🤖 AI 投顾 (Pro)"
+                "🤖 AI 投顾 (Pro)",
+                "🧩 AI决策面板 (Beta)",
             ]
             default_analysis = st.session_state.get("analysis_sub_page", "📈 个股资金流向")
             if default_analysis not in analysis_options:
@@ -145,6 +147,9 @@ def main():
         
     elif selected_sub_page == "🤖 AI 投顾 (Pro)":
         show_ai_analysis()
+
+    elif selected_sub_page == "🧩 AI决策面板 (Beta)":
+        show_ai_decision_panel_beta_task()
         
     elif selected_sub_page == "策略回测实验室":
         show_backtesting()

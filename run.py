@@ -32,22 +32,43 @@ def main():
     except FileNotFoundError:
         print("⚠️ 未找到 lsof，跳过端口占用检查。")
 
-    venv_dir = Path("venv")
-    streamlit_path = venv_dir / "bin" / "streamlit"
-    if not venv_dir.exists() or not streamlit_path.exists():
-        print("❌ 未找到虚拟环境 (venv) 或 streamlit")
-        print("请先运行: pip install -r requirements.txt (在 venv 中)")
+    venv_candidates = [Path(".venv"), Path("venv")]
+    venv_dir = next((p for p in venv_candidates if p.exists()), None)
+    if not venv_dir:
+        print("❌ 未找到虚拟环境目录（支持 .venv 或 venv）")
+        print("请先运行:")
+        print("  python3 -m venv .venv")
+        print("  source .venv/bin/activate")
+        print("  pip install -r requirements.txt")
+        return
+
+    venv_python = venv_dir / "bin" / "python"
+    if not venv_python.exists():
+        print(f"❌ 找到虚拟环境 {venv_dir}，但缺少 python 可执行文件")
+        return
+
+    check_streamlit = subprocess.run(
+        [str(venv_python), "-c", "import streamlit"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if check_streamlit.returncode != 0:
+        print(f"❌ 找到虚拟环境 {venv_dir}，但缺少 streamlit Python 模块")
+        print("请先运行: pip install -r requirements.txt")
         return
 
     if sys.prefix == sys.base_prefix:
-        print("⚠️ 当前未激活 venv，仍将使用 venv/bin/streamlit 启动。")
+        print(f"⚠️ 当前未激活虚拟环境，仍将使用 {venv_python} 启动。")
 
     print("🚀 正在启动系统...")
     print("👉 按下 Ctrl+C 或关闭窗口即可退出")
     print("-----------------------------------------")
 
     cmd = [
-        str(streamlit_path),
+        str(venv_python),
+        "-m",
+        "streamlit",
         "run",
         str(app_path),
         "--server.address=127.0.0.1",

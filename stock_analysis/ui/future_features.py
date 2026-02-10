@@ -6,7 +6,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import json
+import html
+import importlib.util
+import sys
 from datetime import datetime, date, time, timedelta
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 from stock_analysis.data.stock_list import get_stock_provider
@@ -412,6 +416,1009 @@ def _bool_to_cn(value: Optional[bool]) -> str:
 
 def _map_label(value: str, mapping: Dict[str, str]) -> str:
     return mapping.get(value, value or "未知")
+
+
+def _load_external_callable(module_filename: str, callable_name: str):
+    """Load callable from files under project-root/股票分析算法."""
+    try:
+        project_root = Path(__file__).resolve().parents[2]
+        module_path = project_root / "股票分析算法" / module_filename
+        if not module_path.exists():
+            return None, f"未找到实验模块: {module_path}"
+
+        module_name = f"beta_{module_filename.replace('.', '_')}"
+        spec = importlib.util.spec_from_file_location(module_name, str(module_path))
+        if spec is None or spec.loader is None:
+            return None, f"无法加载模块: {module_path}"
+        module = importlib.util.module_from_spec(spec)
+        # dataclass 在执行期会回查 sys.modules[__module__]
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        fn = getattr(module, callable_name, None)
+        if fn is None:
+            return None, f"模块 {module_filename} 缺少函数: {callable_name}"
+        return fn, ""
+    except Exception as exc:
+        return None, f"加载 {module_filename}:{callable_name} 失败: {exc}"
+
+
+def _run_trend_signal_engine(
+    daily_df: pd.DataFrame,
+    stock_code: str,
+    stock_name: str,
+    analysis_day: date
+) -> Dict:
+    fn, err = _load_external_callable("trend_signal.py", "analyze_trend_signal")
+    if fn is None:
+        return {"available": False, "error": err}
+    try:
+        result = fn(
+            daily_df=daily_df,
+            stock_meta={"code": stock_code, "name": stock_name},
+            as_of_date=analysis_day.strftime("%Y-%m-%d"),
+        )
+        if isinstance(result, dict):
+            result["available"] = True
+            return result
+        return {"available": False, "error": "trend_signal 输出格式不是 dict"}
+    except Exception as exc:
+        return {"available": False, "error": f"trend_signal 计算失败: {exc}"}
+
+
+def _map_buy_signal_to_advice(buy_signal: str) -> str:
+    mapping = {
+        "strong_buy": "偏多",
+        "buy": "偏多",
+        "hold": "持有",
+        "wait": "观望",
+        "sell": "减仓",
+        "strong_sell": "规避",
+    }
+    return mapping.get((buy_signal or "").lower(), "观望")
+
+
+def _map_trend_type_to_label(trend_type: str) -> str:
+    mapping = {
+        "strong_bull": "偏强",
+        "bull": "偏强",
+        "weak_bull": "震荡偏强",
+        "consolidation": "震荡",
+        "weak_bear": "震荡偏弱",
+        "bear": "偏弱",
+        "strong_bear": "偏弱",
+    }
+    return mapping.get((trend_type or "").lower(), "震荡")
+
+
+def _extract_ai_dashboard(ai_last: Optional[Dict]) -> Dict:
+    """Best-effort extract of structured dashboard from ai_last cache."""
+    if not isinstance(ai_last, dict):
+        return {}
+
+    raw_result = ai_last.get("raw_result")
+    if isinstance(raw_result, dict):
+        dashboard = raw_result.get("dashboard")
+        if isinstance(dashboard, dict):
+            return dashboard
+
+    response = ai_last.get("response")
+    if not isinstance(response, str) or not response.strip():
+        return {}
+
+    text = response.strip()
+    if "```json" in text:
+        text = text.replace("```json", "").replace("```", "").strip()
+    elif "```" in text:
+        text = text.replace("```", "").strip()
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return {}
+
+    try:
+        data = json.loads(text[start:end + 1])
+    except Exception:
+        return {}
+    if isinstance(data, dict):
+        dashboard = data.get("dashboard")
+        if isinstance(dashboard, dict):
+            return dashboard
+    return {}
+
+
+def _build_beta_raw_result(context: Dict, ai_last: Optional[Dict]) -> Dict:
+    trend_payload = context.get("trend_signal") or {}
+    trend = trend_payload.get("trend_signal", {}) if isinstance(trend_payload, dict) else {}
+    quality = trend_payload.get("quality", {}) if isinstance(trend_payload, dict) else {}
+    stock = context.get("stock", {})
+    price = context.get("price", {})
+    daily_trend = context.get("daily_trend", {})
+
+    support_levels = trend.get("support_levels") or []
+    resistance_levels = trend.get("resistance_levels") or []
+    support_level = support_levels[0] if support_levels else None
+    resistance_level = resistance_levels[0] if resistance_levels else None
+    second_support_level = support_levels[1] if len(support_levels) > 1 else None
+    ai_dashboard = _extract_ai_dashboard(ai_last)
+    ai_battle = ai_dashboard.get("battle_plan", {}) if isinstance(ai_dashboard, dict) else {}
+    ai_sniper = ai_battle.get("sniper_points", {}) if isinstance(ai_battle, dict) else {}
+    ai_position = ai_battle.get("position_strategy", {}) if isinstance(ai_battle, dict) else {}
+    ai_checklist = ai_battle.get("action_checklist", []) if isinstance(ai_battle, dict) else []
+    ai_intel = ai_dashboard.get("intelligence", {}) if isinstance(ai_dashboard, dict) else {}
+
+    analysis_summary = ""
+    if ai_last and ai_last.get("response"):
+        analysis_summary = str(ai_last.get("response", ""))[:1200]
+    elif context.get("readable_summary"):
+        summary = context.get("readable_summary", {})
+        trend_lines = summary.get("trend", [])
+        analysis_summary = "；".join(trend_lines[:3]) if trend_lines else ""
+
+    ma_alignment_text = trend.get("ma_alignment_text") or _map_label(
+        daily_trend.get("ma_alignment", ""),
+        {"bullish": "多头排列", "bearish": "空头排列", "mixed": "均线混合"},
+    )
+    volume_ratio = trend.get("volume_ratio_5d")
+    volume_status = trend.get("volume_status")
+    volume_status_cn = {
+        "heavy_up": "放量上涨",
+        "heavy_down": "放量下跌",
+        "shrink_up": "缩量上涨",
+        "shrink_down": "缩量回调",
+        "normal": "量能正常",
+    }.get(volume_status, "量能正常")
+
+    score = trend.get("signal_score")
+    buy_signal = trend.get("buy_signal", "wait")
+    confidence = {"high": "高", "medium": "中", "low": "低"}.get(
+        quality.get("data_sufficiency"), "中"
+    )
+    current_price = trend.get("current_price", price.get("close"))
+    ma5 = trend.get("ma5", daily_trend.get("ma5"))
+    ma10 = trend.get("ma10", daily_trend.get("ma10"))
+    ma20 = trend.get("ma20", daily_trend.get("ma20"))
+    bias_ma5 = trend.get("bias_ma5_pct")
+    signal_reasons = [str(x) for x in (trend.get("signal_reasons") or []) if x]
+    risk_factors = [str(x) for x in (trend.get("risk_factors") or []) if x]
+    readable_summary = context.get("readable_summary", {}) or {}
+    anomaly_lines = [str(x) for x in (readable_summary.get("anomalies") or []) if x]
+    intraday_lines = [str(x) for x in (readable_summary.get("intraday") or []) if x]
+
+    def _price_text(val: Optional[float], suffix: str = "") -> Optional[str]:
+        num = _safe_number(val)
+        if num is None:
+            return None
+        return f"{_format_num(num)}元{suffix}"
+
+    ideal_buy_num = _safe_number(ma5) or _safe_number(support_level)
+    secondary_buy_num = _safe_number(second_support_level)
+    if secondary_buy_num is None and ideal_buy_num is not None:
+        secondary_buy_num = ideal_buy_num * 0.98
+    support_candidates: List[float] = []
+    for candidate in (second_support_level, support_level, ma20):
+        num = _safe_number(candidate)
+        if num is not None:
+            support_candidates.append(num)
+    stop_loss_base = min(support_candidates) if support_candidates else None
+    stop_loss_num = stop_loss_base * 0.98 if stop_loss_base is not None else None
+    take_profit_num = _safe_number(resistance_level) or _safe_number(ma10)
+    if take_profit_num is None and _safe_number(current_price) is not None:
+        take_profit_num = _safe_number(current_price) * 1.05
+
+    suggested_position = {
+        "strong_buy": "5成",
+        "buy": "3成",
+        "hold": "2成",
+        "wait": "0-1成",
+        "sell": "0成",
+        "strong_sell": "0成",
+    }.get((buy_signal or "").lower(), "1-2成")
+
+    if ideal_buy_num is not None and ma10 is not None:
+        entry_plan = (
+            f"优先观察 {_format_num(ideal_buy_num)} 附近承接，"
+            f"有效站稳 MA10({_format_num(ma10)}) 后再考虑加仓。"
+        )
+    elif ideal_buy_num is not None:
+        entry_plan = f"优先等待 {_format_num(ideal_buy_num)} 附近企稳再评估介入。"
+    else:
+        entry_plan = "等待关键支撑位确认后分批介入。"
+
+    if stop_loss_num is not None:
+        risk_control = f"若跌破 {_format_num(stop_loss_num)} 元并无法快速收回，应降低仓位。"
+    else:
+        risk_control = "若趋势转弱或放量下跌，优先控制回撤。"
+
+    alignment_type = str(trend.get("ma_alignment_type", "")).lower()
+    bullish_layout = alignment_type in {"strong_bull", "bull", "weak_bull"}
+    if not bullish_layout:
+        ma_text = str(ma_alignment_text or "")
+        if any(keyword in ma_text for keyword in ["尚未", "未形成", "空头", "混合", "缠绕"]):
+            bullish_layout = False
+        elif "多头" in ma_text:
+            bullish_layout = True
+
+    action_checklist: List[str] = []
+    if bullish_layout:
+        action_checklist.append("✅ 均线结构偏强（多头排列）")
+    else:
+        action_checklist.append("⚠️ 均线结构未完全转强")
+    if bias_ma5 is not None:
+        action_checklist.append(
+            "✅ 乖离率可接受" if abs(bias_ma5) <= 5 else "⚠️ 乖离率偏高，谨慎追涨"
+        )
+    if _safe_number(volume_ratio) is not None:
+        action_checklist.append(
+            "✅ 量能有配合" if _safe_number(volume_ratio) >= 1 else "⚠️ 量能偏弱"
+        )
+    if risk_factors:
+        action_checklist.append("⚠️ 存在风险因子，需动态跟踪")
+
+    news_payload = context.get("news", {}) or {}
+    news_items = news_payload.get("items", []) if isinstance(news_payload, dict) else []
+    latest_news = None
+    if news_items:
+        titles = [str(item.get("title", "")).strip() for item in news_items[:2] if item.get("title")]
+        latest_news = "；".join(titles) if titles else None
+    if not latest_news and intraday_lines:
+        latest_news = intraday_lines[0]
+
+    positive_catalysts = signal_reasons[:3]
+    if not positive_catalysts and _safe_number(volume_ratio) is not None and _safe_number(volume_ratio) >= 1:
+        positive_catalysts.append("量能较近5日均值改善")
+    if not positive_catalysts and "多头" in ma_alignment_text:
+        positive_catalysts.append("均线结构维持偏强")
+
+    risk_alerts = risk_factors[:3]
+    if not risk_alerts and anomaly_lines:
+        risk_alerts = anomaly_lines[:2]
+    if not risk_alerts and trend.get("no_chase"):
+        risk_alerts = ["当前乖离偏高，短线不宜追涨"]
+
+    sentiment_summary = (
+        f"{_map_trend_type_to_label(trend.get('ma_alignment_type', ''))}，"
+        f"{volume_status_cn}；"
+        f"{'风险可控' if not risk_alerts else '存在需跟踪的风险项'}。"
+    )
+
+    # Align strategy/intelligence source with original project behavior:
+    # prefer AI structured dashboard payload; if absent, do not fabricate sniper prices.
+    if isinstance(ai_intel, dict) and ai_intel:
+        latest_news = ai_intel.get("latest_news") or latest_news
+        risk_alerts = ai_intel.get("risk_alerts") or risk_alerts
+        positive_catalysts = ai_intel.get("positive_catalysts") or positive_catalysts
+        sentiment_summary = ai_intel.get("sentiment_summary") or sentiment_summary
+
+    if isinstance(ai_sniper, dict) and ai_sniper:
+        sniper_points = {
+            "ideal_buy": ai_sniper.get("ideal_buy"),
+            "secondary_buy": ai_sniper.get("secondary_buy"),
+            "stop_loss": ai_sniper.get("stop_loss"),
+            "take_profit": ai_sniper.get("take_profit"),
+        }
+    else:
+        sniper_points = {
+            "ideal_buy": None,
+            "secondary_buy": None,
+            "stop_loss": None,
+            "take_profit": None,
+        }
+
+    if isinstance(ai_position, dict) and ai_position:
+        suggested_position = ai_position.get("suggested_position") or suggested_position
+        entry_plan = ai_position.get("entry_plan") or entry_plan
+        risk_control = ai_position.get("risk_control") or risk_control
+
+    if isinstance(ai_checklist, list) and ai_checklist:
+        action_checklist = ai_checklist
+
+    one_sentence = (
+        f"{stock.get('name', stock.get('code', '该标的'))}当前{_map_trend_type_to_label(trend.get('ma_alignment_type', ''))}，"
+        f"建议结合 MA5({_format_num(ma5)}) 与压力位({_format_num(resistance_level)})观察。"
+    )
+
+    return {
+        "code": stock.get("code", ""),
+        "name": stock.get("name", ""),
+        "sentiment_score": score,
+        "trend_prediction": _map_trend_type_to_label(trend.get("ma_alignment_type", "")),
+        "operation_advice": _map_buy_signal_to_advice(buy_signal),
+        "confidence_level": confidence,
+        "change_pct": price.get("change_pct"),
+        "current_price": current_price,
+        "analysis_summary": analysis_summary,
+        "key_points": "；".join((trend.get("signal_reasons") or [])[:4]),
+        "risk_warning": "；".join((trend.get("risk_factors") or [])[:3]),
+        "buy_reason": "；".join((trend.get("signal_reasons") or [])[:3]),
+        "data_sources": "本地规则引擎(beta) + 当前分析上下文",
+        "search_performed": False,
+        "dashboard": {
+            "core_conclusion": {
+                "one_sentence": one_sentence,
+                "signal_type": buy_signal,
+                "position_advice": {
+                    "no_position": "等待关键位确认后再行动",
+                    "has_position": "关注压力位表现与风险阈值",
+                },
+            },
+            "data_perspective": {
+                "trend_status": {
+                    "ma_alignment": ma_alignment_text,
+                    "trend_score": trend.get("trend_strength_score"),
+                },
+                "price_position": {
+                    "current_price": current_price,
+                    "ma5": ma5,
+                    "ma10": ma10,
+                    "ma20": ma20,
+                    "bias_ma5": trend.get("bias_ma5_pct"),
+                    "bias_status": "安全" if not trend.get("no_chase") else "追高风险",
+                    "support_level": support_level,
+                    "resistance_level": resistance_level,
+                },
+                "volume_analysis": {
+                    "volume_ratio": volume_ratio,
+                    "volume_status": volume_status_cn,
+                    "turnover_rate": None,
+                    "volume_meaning": trend.get("volume_trend_text"),
+                },
+                "chip_structure": {},
+            },
+            "intelligence": {
+                "latest_news": latest_news,
+                "risk_alerts": risk_alerts,
+                "positive_catalysts": positive_catalysts,
+                "earnings_outlook": "Beta 页面暂未接入财报明细，建议在 Pro 页面结合新闻与研报复核。",
+                "sentiment_summary": sentiment_summary,
+            },
+            "battle_plan": {
+                "sniper_points": sniper_points,
+                "position_strategy": {
+                    "suggested_position": suggested_position,
+                    "entry_plan": entry_plan,
+                    "risk_control": risk_control,
+                },
+                "action_checklist": action_checklist,
+            },
+        },
+    }
+
+
+def _build_beta_context_snapshot(context: Dict) -> Dict:
+    stock = context.get("stock", {})
+    price = context.get("price", {})
+    daily_trend = context.get("daily_trend", {})
+    trend_payload = context.get("trend_signal") or {}
+    trend = trend_payload.get("trend_signal", {}) if isinstance(trend_payload, dict) else {}
+
+    return {
+        "enhanced_context": {
+            "code": stock.get("code", ""),
+            "stock_name": stock.get("name", ""),
+            "ma_status": trend.get("ma_alignment_text") or daily_trend.get("ma_alignment", ""),
+            "today": {
+                "ma5": trend.get("ma5", daily_trend.get("ma5")),
+                "ma10": trend.get("ma10", daily_trend.get("ma10")),
+                "ma20": trend.get("ma20", daily_trend.get("ma20")),
+                "volume_ratio": trend.get("volume_ratio_5d"),
+            },
+            "realtime": {
+                "price": trend.get("current_price", price.get("close")),
+                "change_pct": price.get("change_pct"),
+                "volume_ratio": trend.get("volume_ratio_5d"),
+                "turnover_rate": None,
+                "high": price.get("high"),
+                "low": price.get("low"),
+            },
+            "chip": {},
+        }
+    }
+
+
+def _display_value(value):
+    if value in (None, ""):
+        return "--"
+    if isinstance(value, list):
+        return "；".join(str(v) for v in value) if value else "--"
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    return value
+
+
+def _is_missing_display_value(value) -> bool:
+    if value in (None, "", "--"):
+        return True
+    if isinstance(value, list):
+        return all(_is_missing_display_value(v) for v in value)
+    if isinstance(value, dict):
+        return len(value) == 0
+    if isinstance(value, str) and value.strip() in {"--", "未知", "暂无"}:
+        return True
+    return False
+
+
+def _inject_beta_panel_styles():
+    st.markdown(
+        """
+        <style>
+        .beta-hero {
+            background: linear-gradient(135deg, #0f172a 0%, #1f2937 100%);
+            border-radius: 14px;
+            padding: 14px 16px;
+            color: #f8fafc;
+            margin-bottom: 14px;
+            border: 1px solid #334155;
+        }
+        .beta-hero-title {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 4px;
+            color: #e2e8f0;
+        }
+        .beta-hero-sub {
+            font-size: 12px;
+            color: #cbd5e1;
+        }
+        .beta-kpi-card {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 12px 14px;
+            min-height: 88px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+            margin-bottom: 10px;
+        }
+        .beta-kpi-label {
+            font-size: 12px;
+            color: #64748b;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+        .beta-kpi-value {
+            font-size: 22px;
+            line-height: 1.2;
+            font-weight: 800;
+            color: #0f172a;
+            font-family: 'SF Mono', 'Menlo', monospace;
+        }
+        .beta-tone-up .beta-kpi-value { color: #dc2626; }
+        .beta-tone-down .beta-kpi-value { color: #16a34a; }
+        .beta-tone-mid .beta-kpi-value { color: #0ea5e9; }
+        .beta-field-card {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+        }
+        .beta-field-title {
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .beta-field-value {
+            color: #0f172a;
+            font-size: 14px;
+            line-height: 1.45;
+            font-weight: 600;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .beta-field-source {
+            color: #94a3b8;
+            font-size: 11px;
+            margin-top: 6px;
+            font-family: 'SF Mono', 'Menlo', monospace;
+        }
+        .beta-diag-ok {
+            background: #f0fdf4;
+            border: 1px solid #86efac;
+            border-radius: 10px;
+            padding: 10px 12px;
+            color: #166534;
+            font-size: 13px;
+        }
+        .beta-diag-warn {
+            background: #fff7ed;
+            border: 1px solid #fdba74;
+            border-radius: 10px;
+            padding: 10px 12px;
+            color: #9a3412;
+            font-size: 13px;
+        }
+        .beta-point-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .beta-point-card {
+            border-radius: 10px;
+            padding: 10px 12px;
+            border: 1px solid #e5e7eb;
+            background: #ffffff;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+        }
+        .beta-point-buy { border-left: 4px solid #0284c7; }
+        .beta-point-stop { border-left: 4px solid #dc2626; }
+        .beta-point-tp { border-left: 4px solid #16a34a; }
+        .beta-point-alt { border-left: 4px solid #f59e0b; }
+        .beta-point-label {
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .beta-point-value {
+            color: #0f172a;
+            font-size: 20px;
+            font-family: 'SF Mono', 'Menlo', monospace;
+            font-weight: 800;
+            line-height: 1.2;
+        }
+        .beta-point-delta {
+            margin-top: 4px;
+            color: #475569;
+            font-size: 12px;
+        }
+        .beta-summary-card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin-bottom: 10px;
+        }
+        .beta-summary-title {
+            color: #334155;
+            font-size: 13px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+        .beta-summary-text {
+            color: #0f172a;
+            font-size: 14px;
+            line-height: 1.55;
+            white-space: pre-wrap;
+        }
+        @media (max-width: 900px) {
+            .beta-point-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _beta_value_to_html(value) -> str:
+    safe_value = _display_value(value)
+    if isinstance(safe_value, list):
+        if not safe_value:
+            return "--"
+        return "<br>".join(f"• {html.escape(str(v))}" for v in safe_value)
+    if isinstance(value, list):
+        if not value:
+            return "--"
+        return "<br>".join(f"• {html.escape(str(v))}" for v in value)
+    if isinstance(safe_value, dict):
+        return html.escape(json.dumps(safe_value, ensure_ascii=False))
+    return html.escape(str(safe_value))
+
+
+def _beta_card_tone(field: Dict) -> str:
+    key = str(field.get("key", "")).lower()
+    label = str(field.get("label", "")).lower()
+    text = f"{key} {label}"
+    if "涨跌" in text or "change" in text:
+        value = _safe_number(field.get("value"))
+        if value is not None and value > 0:
+            return "beta-tone-up"
+        if value is not None and value < 0:
+            return "beta-tone-down"
+    if "评分" in text or "score" in text:
+        return "beta-tone-mid"
+    return ""
+
+
+def _render_top_field_cards(fields: List[Dict]):
+    if not fields:
+        return
+    row_size = 3
+    for start in range(0, len(fields), row_size):
+        chunk = fields[start:start + row_size]
+        cols = st.columns(len(chunk))
+        for idx, field in enumerate(chunk):
+            with cols[idx]:
+                tone = _beta_card_tone(field)
+                st.markdown(
+                    f"""
+                    <div class="beta-kpi-card {tone}">
+                        <div class="beta-kpi-label">{html.escape(str(field.get("label", "")))}</div>
+                        <div class="beta-kpi-value">{_beta_value_to_html(field.get("value"))}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+
+def _render_panel_table(fields: List[Dict], show_source: bool = True):
+    if not fields:
+        st.info("暂无可展示字段")
+        return
+    col_count = 2
+    for start in range(0, len(fields), col_count):
+        chunk = fields[start:start + col_count]
+        cols = st.columns(len(chunk))
+        for idx, field in enumerate(chunk):
+            with cols[idx]:
+                source_html = ""
+                if show_source:
+                    source_html = (
+                        f'<div class="beta-field-source">'
+                        f'{html.escape(str(field.get("source") or "--"))}'
+                        f"</div>"
+                    )
+                st.markdown(
+                    f"""
+                    <div class="beta-field-card">
+                        <div class="beta-field-title">{html.escape(str(field.get("label", "")))}</div>
+                        <div class="beta-field-value">{_beta_value_to_html(field.get("value"))}</div>
+                        {source_html}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+
+def _render_data_scope_hint(context: Dict):
+    """Render explicit daily-vs-intraday scope hint without changing calculation logic."""
+    stock = context.get("stock", {}) or {}
+    daily_trend = context.get("daily_trend", {}) or {}
+    today_partial = context.get("today_partial", {}) or {}
+    scope = today_partial.get("scope", {}) or {}
+
+    analysis_date = stock.get("actual_date") or stock.get("requested_date") or "未知"
+    daily_last_date = daily_trend.get("last_date") or "未知"
+    intraday_asof = scope.get("as_of") or "未知"
+    partial_excluded = bool(daily_trend.get("partial_excluded"))
+
+    st.caption(
+        f"口径说明: 日线口径截至 {daily_last_date} | 盘中口径截至 {intraday_asof} | 分析目标日期 {analysis_date}"
+    )
+    if partial_excluded and daily_last_date != "未知" and str(analysis_date) != str(daily_last_date):
+        st.info(
+            "当日未收盘时，系统会排除当日日线K线，避免用未收盘数据计算 MA/趋势；"
+            "盘中资金流与分时仍使用当日实时数据。"
+        )
+
+
+def _extract_num(value) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except Exception:
+            return None
+    text = str(value)
+    try:
+        return float("".join(ch for ch in text if ch in "0123456789.-"))
+    except Exception:
+        return None
+
+
+def _strategy_card_style_by_key(key: str) -> str:
+    k = (key or "").lower()
+    if "stop" in k:
+        return "beta-point-stop"
+    if "take" in k:
+        return "beta-point-tp"
+    if "ideal" in k:
+        return "beta-point-buy"
+    if "secondary" in k:
+        return "beta-point-alt"
+    return "beta-point-buy"
+
+
+def _render_strategy_highlight(
+    fields: List[Dict],
+    context: Dict,
+    show_others: bool = True,
+    show_delta: bool = False,
+):
+    if not fields:
+        st.info("暂无策略点位数据")
+        return
+
+    key_map = {f.get("key"): f for f in fields}
+    highlight_keys = ["ideal_buy", "secondary_buy", "stop_loss", "take_profit"]
+    price_now = (
+        ((context.get("trend_signal") or {}).get("trend_signal") or {}).get("current_price")
+        or (context.get("price") or {}).get("close")
+    )
+    price_now_num = _extract_num(price_now)
+
+    cards_payload = []
+    for key in highlight_keys:
+        field = key_map.get(key)
+        if not field:
+            continue
+        if _is_missing_display_value(field.get("value")):
+            continue
+        label = html.escape(str(field.get("label", "")))
+        raw_val = field.get("value")
+        val_text = html.escape(str(_display_value(raw_val)))
+        point_num = _extract_num(raw_val)
+        delta_text = ""
+        if show_delta:
+            delta_text = "相对现价: --"
+            if price_now_num and point_num:
+                pct = (point_num - price_now_num) / price_now_num * 100
+                delta_text = f"相对现价: {pct:+.2f}%"
+        cards_payload.append(
+            {
+                "style": _strategy_card_style_by_key(key),
+                "label": label,
+                "value": val_text,
+                "delta": html.escape(delta_text),
+            }
+        )
+
+    if cards_payload:
+        row_size = 2
+        for start in range(0, len(cards_payload), row_size):
+            chunk = cards_payload[start:start + row_size]
+            cols = st.columns(len(chunk))
+            for idx, card in enumerate(chunk):
+                with cols[idx]:
+                    st.markdown(
+                        (
+                            f'<div class="beta-point-card {card["style"]}">'
+                            f'<div class="beta-point-label">{card["label"]}</div>'
+                            f'<div class="beta-point-value">{card["value"]}</div>'
+                            + (
+                                f'<div class="beta-point-delta">{card["delta"]}</div>'
+                                if show_delta and card["delta"]
+                                else ""
+                            )
+                            + "</div>"
+                        ),
+                        unsafe_allow_html=True,
+                    )
+    else:
+        st.info("暂无可展示的策略点位。")
+
+    others = [
+        f
+        for f in fields
+        if f.get("key") not in highlight_keys and not _is_missing_display_value(f.get("value"))
+    ]
+    if others and show_others:
+        st.markdown("##### 其余策略信息")
+        _render_panel_table(others, show_source=False)
+
+
+def _render_conclusion_summary(fields: List[Dict], show_source: bool = True):
+    if not fields:
+        st.info("暂无结论数据")
+        return
+
+    key_map = {f.get("key"): f for f in fields}
+    one_sentence = _display_value((key_map.get("one_sentence") or {}).get("value"))
+    signal_type = _display_value((key_map.get("signal_type") or {}).get("value"))
+    analysis_summary = _display_value((key_map.get("analysis_summary") or {}).get("value"))
+    key_points = _display_value((key_map.get("key_points") or {}).get("value"))
+    risk_warning = _display_value((key_map.get("risk_warning") or {}).get("value"))
+    buy_reason = _display_value((key_map.get("buy_reason") or {}).get("value"))
+
+    st.markdown(
+        f"""
+        <div class="beta-summary-card">
+            <div class="beta-summary-title">一句话结论</div>
+            <div class="beta-summary-text">{html.escape(str(one_sentence))}</div>
+        </div>
+        <div class="beta-summary-card">
+            <div class="beta-summary-title">信号标签</div>
+            <div class="beta-summary-text">{html.escape(str(signal_type))}</div>
+        </div>
+        <div class="beta-summary-card">
+            <div class="beta-summary-title">综合摘要</div>
+            <div class="beta-summary-text">{html.escape(str(analysis_summary))}</div>
+        </div>
+        <div class="beta-summary-card">
+            <div class="beta-summary-title">关键要点</div>
+            <div class="beta-summary-text">{html.escape(str(key_points))}</div>
+        </div>
+        <div class="beta-summary-card">
+            <div class="beta-summary-title">风险警示</div>
+            <div class="beta-summary-text">{html.escape(str(risk_warning))}</div>
+        </div>
+        <div class="beta-summary-card">
+            <div class="beta-summary-title">买入/观望理由</div>
+            <div class="beta-summary-text">{html.escape(str(buy_reason))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("查看完整结论字段", expanded=False):
+        _render_panel_table(fields, show_source=show_source)
+
+
+def _build_beta_panel_payload(context: Dict, ai_last: Optional[Dict]) -> Tuple[Optional[Dict], str]:
+    build_panels, load_err = _load_external_callable("ui_mapping.py", "build_display_panels")
+    if build_panels is None:
+        return None, load_err
+
+    beta_raw_result = _build_beta_raw_result(context=context, ai_last=ai_last)
+    beta_snapshot = _build_beta_context_snapshot(context)
+    query_meta = {
+        "query_id": ai_last.get("session_id", "") if ai_last else "",
+        "analysis_time": ai_last.get("ts", "") if ai_last else "",
+        "report_type": "beta_preview",
+        "source": "streamlit",
+    }
+    try:
+        panel_payload = build_panels(beta_raw_result, beta_snapshot, query_meta)
+        if not isinstance(panel_payload, dict):
+            return None, "ui_mapping 输出格式不是 dict"
+        return panel_payload, ""
+    except Exception as exc:
+        return None, f"构建新面板失败: {exc}"
+
+
+def _get_panel_fields(panel_payload: Dict, panel_id: str) -> List[Dict]:
+    for panel in panel_payload.get("panels", []):
+        if panel.get("id") == panel_id:
+            return panel.get("fields", [])
+    return []
+
+
+def show_ai_decision_panel_beta():
+    st.header("🧩 AI决策面板 (Beta)")
+    st.caption("独立展示结构化决策面板，基于本地规则引擎与当前分析上下文，不替代原有 AI 投顾页面。")
+    _inject_beta_panel_styles()
+
+    if "df" not in st.session_state or st.session_state.df is None:
+        st.info("请先在“个股资金流向”页面完成一次分析。")
+        return
+
+    with st.expander("ℹ️ 页面说明", expanded=False):
+        st.write(
+            "该页面用于预览新的“决策面板分组展示”。"
+            "数据来自当前会话上下文与本地规则引擎（股票分析算法/trend_signal.py、ui_mapping.py）。"
+        )
+
+    col_cfg1, col_cfg2, col_cfg3 = st.columns([1, 1, 2])
+    with col_cfg1:
+        show_source = st.checkbox("显示字段来源", value=True)
+    with col_cfg2:
+        show_json = st.checkbox("显示原始JSON", value=False)
+    with col_cfg3:
+        st.caption("提示：切换股票或日期后点击“刷新面板”可重新计算。")
+
+    refresh_btn = st.button("刷新面板", type="primary")
+
+    if "beta_panel_payload" not in st.session_state:
+        st.session_state.beta_panel_payload = None
+    if "beta_panel_context" not in st.session_state:
+        st.session_state.beta_panel_context = None
+    if "beta_panel_error" not in st.session_state:
+        st.session_state.beta_panel_error = ""
+
+    # 首次进入自动计算；之后可点击刷新手动更新
+    should_refresh = refresh_btn or st.session_state.beta_panel_payload is None
+    if should_refresh:
+        context = _build_context(news_df=None, include_news=False)
+        panel_payload, err = _build_beta_panel_payload(
+            context=context,
+            ai_last=st.session_state.get("ai_last"),
+        )
+        st.session_state.beta_panel_payload = panel_payload
+        st.session_state.beta_panel_context = context
+        st.session_state.beta_panel_error = err
+
+    if st.session_state.beta_panel_error:
+        st.error(st.session_state.beta_panel_error)
+        return
+
+    panel_payload = st.session_state.beta_panel_payload
+    context = st.session_state.beta_panel_context or {}
+    if not panel_payload:
+        st.info("暂无新面板数据。")
+        return
+
+    _render_data_scope_hint(context)
+
+    stock = panel_payload.get("stock", {})
+    actual_date = (context.get("stock", {}) or {}).get("actual_date") or "未知日期"
+    trend_block = (context.get("trend_signal") or {}).get("trend_signal", {})
+    summary_line = (
+        f"标的 {stock.get('code') or '--'} {stock.get('name') or '--'} | "
+        f"日线日期 {actual_date} | "
+        f"规则信号 {trend_block.get('buy_signal', '--')} | "
+        f"规则评分 {trend_block.get('signal_score', '--')}"
+    )
+    st.markdown(
+        f"""
+        <div class="beta-hero">
+            <div class="beta-hero-title">结构化决策总览</div>
+            <div class="beta-hero-sub">{html.escape(summary_line)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 顶部核心卡片
+    top_fields = _get_panel_fields(panel_payload, "top_cards")
+    if top_fields:
+        st.markdown("### 核心概览")
+        _render_top_field_cards(top_fields)
+
+    strategy_fields = _get_panel_fields(panel_payload, "strategy")
+    if strategy_fields:
+        st.markdown("### 策略点位")
+        _render_strategy_highlight(strategy_fields, context=context, show_others=False)
+
+    st.markdown("### 决策分组")
+    tabs = st.tabs(
+        [
+            "技术结构",
+            "量能筹码",
+            "策略点位",
+            "情报风险",
+            "结论解释",
+            "元数据",
+        ]
+    )
+    with tabs[0]:
+        _render_panel_table(_get_panel_fields(panel_payload, "technical"), show_source=show_source)
+    with tabs[1]:
+        _render_panel_table(_get_panel_fields(panel_payload, "volume_chip"), show_source=show_source)
+    with tabs[2]:
+        _render_strategy_highlight(_get_panel_fields(panel_payload, "strategy"), context=context)
+    with tabs[3]:
+        intelligence_fields = [
+            f for f in _get_panel_fields(panel_payload, "intelligence")
+            if not _is_missing_display_value(f.get("value"))
+        ]
+        if intelligence_fields:
+            _render_panel_table(intelligence_fields, show_source=show_source)
+        else:
+            st.info("暂无可展示的情报/风险字段。")
+    with tabs[4]:
+        summary_mode = st.toggle("摘要模式", value=True, key="beta_summary_mode")
+        if summary_mode:
+            _render_conclusion_summary(
+                _get_panel_fields(panel_payload, "conclusion"),
+                show_source=show_source,
+            )
+        else:
+            _render_panel_table(_get_panel_fields(panel_payload, "conclusion"), show_source=show_source)
+    with tabs[5]:
+        _render_panel_table(_get_panel_fields(panel_payload, "meta"), show_source=show_source)
+
+    diagnostics = panel_payload.get("diagnostics", {})
+    notes = diagnostics.get("notes", [])
+    flags = diagnostics.get("conflict_flags", {})
+    st.markdown("### 数据诊断")
+    if notes:
+        st.markdown(
+            f'<div class="beta-diag-warn">{html.escape(" | ".join(notes))}</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown('<div class="beta-diag-ok">未检测到口径冲突。</div>', unsafe_allow_html=True)
+    st.caption(f"冲突标记: {flags}")
+
+    if show_json:
+        with st.expander("查看面板JSON", expanded=False):
+            st.json(_json_safe(panel_payload))
+        with st.expander("查看上下文JSON", expanded=False):
+            st.json(_json_safe(context))
 
 
 def _extract_latest_time(df: pd.DataFrame) -> Optional[datetime]:
@@ -959,9 +1966,11 @@ def show_ai_analysis():
         if any(k in user_question for k in news_keywords) and not include_news:
             st.warning("检测到新闻类问题，建议勾选“包含最新相关新闻”并拉取新闻。")
 
+    preview_context = _build_context(news_df=news_df, include_news=include_news)
+    _render_data_scope_hint(preview_context)
+
     with st.expander("📌 输入给模型的数据预览", expanded=False):
-        context = _build_context(news_df=news_df, include_news=include_news)
-        st.json(_json_safe(context))
+        st.json(_json_safe(preview_context))
 
     col_g1, col_g2 = st.columns([1, 3])
     with col_g1:
@@ -1037,6 +2046,9 @@ def show_ai_analysis():
 
     if st.session_state.ai_last:
         st.markdown("### ✅ 最新解读")
+        latest_context = st.session_state.ai_last.get("context", {}) if isinstance(st.session_state.ai_last, dict) else {}
+        if isinstance(latest_context, dict) and latest_context:
+            _render_data_scope_hint(latest_context)
         stock_label = f"{st.session_state.ai_last.get('stock_code', '')} {st.session_state.ai_last.get('stock_name', '')}".strip()
         date_label = st.session_state.ai_last.get("actual_date") or st.session_state.ai_last.get("requested_date") or "未知日期"
         st.caption(
@@ -1157,6 +2169,12 @@ def _build_context(
     daily_trend = _build_daily_trend(daily_df, daily_window)
     if daily_trend:
         daily_trend["partial_excluded"] = exclude_partial_daily
+    trend_signal = _run_trend_signal_engine(
+        daily_df=daily_df,
+        stock_code=stock_code,
+        stock_name=stock_name,
+        analysis_day=analysis_day,
+    )
     price_range_analysis = PriceRangeAnalyzer(
         pivot_window=1,
         atr_period=14,
@@ -1353,6 +2371,7 @@ def _build_context(
         },
         "daily_series": daily_series,
         "daily_trend": daily_trend,
+        "trend_signal": trend_signal,
         "price_range_analysis": price_range_analysis,
         "today_partial": today_partial,
         "readable_summary": readable_summary,
