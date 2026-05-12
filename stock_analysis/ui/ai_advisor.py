@@ -1653,7 +1653,16 @@ def _build_prompts(
         else:
             constraints.append("事实描述：若未提供新闻数据需明确说明无法判断新闻影响")
 
-    user_prompt = {
+    # 预设专用输出模板（v2 新增，强制 AI 按固定结构输出）
+    output_template = None
+    if preset_mode == "range" and hasattr(cfg, "RANGE_OUTPUT_TEMPLATE"):
+        output_template = cfg.RANGE_OUTPUT_TEMPLATE
+        constraints.append("严格按照'输出模板'的结构输出，不得增减章节，章节标题保持原样")
+    elif preset_mode == "risk" and hasattr(cfg, "RISK_OUTPUT_TEMPLATE"):
+        output_template = cfg.RISK_OUTPUT_TEMPLATE
+        constraints.append("严格按照'输出模板'的结构输出，不得增减章节，章节标题保持原样")
+
+    user_prompt: Dict = {
         "分析目标": focus,
         "输出风格": cfg.STYLE_MAP.get(style, style),
         "输出模式": advice_mode,
@@ -1663,6 +1672,8 @@ def _build_prompts(
         "数据快照": _json_safe(context),
         "输出格式": cfg.OUTPUT_FORMAT,
     }
+    if output_template:
+        user_prompt["输出模板"] = output_template
 
     return cfg.SYSTEM_PROMPT, json.dumps(user_prompt, ensure_ascii=False, indent=2)
 
