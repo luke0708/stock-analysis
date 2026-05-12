@@ -256,14 +256,25 @@ def process_and_display(df, stock_code, analysis_date, actual_source, raw_df=Non
     df_clean, quality_report = cleaner.clean(df)
     indicator_calc = IndicatorCalculator()
     df_with_indicators = indicator_calc.calculate_all(df_clean)
-    
+
     st.session_state.df = df_with_indicators
     st.session_state.actual_source = actual_source
     st.session_state.raw_df = raw_df
-    st.session_state.tick_context = _build_tick_context(raw_df, analysis_date)
+    tick_ctx = _build_tick_context(raw_df, analysis_date)
+    st.session_state.tick_context = tick_ctx
     st.session_state.quality_report = quality_report
     st.session_state.all_analysis = perform_all_analysis(df_with_indicators)
     st.session_state.last_stock_code = stock_code
+
+    # flow_summary 落 L2（当日 tick 不缓存，但汇总快照落库供跨页面复用）
+    if tick_ctx and tick_ctx.get("flow_summary") and stock_code:
+        try:
+            from stock_analysis.data.cache_store import CacheStore
+            analysis_day = analysis_date.date() if hasattr(analysis_date, "date") else analysis_date
+            CacheStore().save_flow_summary(stock_code, str(analysis_day), tick_ctx["flow_summary"])
+        except Exception as _ce:
+            import logging
+            logging.getLogger(__name__).warning("flow_summary L2 写入失败: %s", _ce)
 
 def fetch_data(stock_code, date_str, provider_choice, tushare_token):
     actual_source = None
@@ -712,8 +723,9 @@ def display_results(stock_code, analysis_date):
                         api_key=api_key,
                         system_prompt=system_prompt,
                         user_prompt=user_prompt,
+                        model="deepseek-v4-flash",
                         temperature=0.2,
-                        max_tokens=600
+                        max_tokens=4000
                     )
                     entry = {
                         "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
