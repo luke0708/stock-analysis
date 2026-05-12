@@ -363,9 +363,17 @@ def display_results(stock_code, analysis_date):
     source_note = source
     if tick_context:
         source_note = f"{source} + Tick"
-    st.caption(
-        f"最后更新: {current_time} | {date_note} | 分析对象: {stock_code} {name} | 数据源: {source_note} | 质量: {quality['quality_score']:.0f}/100"
-    )
+
+    _cap_col, _btn_col = st.columns([8, 2])
+    with _cap_col:
+        st.caption(
+            f"最后更新: {current_time} | {date_note} | 分析对象: {stock_code} {name} | 数据源: {source_note} | 质量: {quality['quality_score']:.0f}/100"
+        )
+    with _btn_col:
+        if st.button("🤖 AI 投顾分析", key="jump_to_ai", use_container_width=True):
+            st.session_state["page"] = "🤖 AI 投顾"
+            st.session_state["ai_auto_trigger"] = True
+            st.rerun()
 
     if tick_context:
         open_auction_df = tick_context.get("auction_df")

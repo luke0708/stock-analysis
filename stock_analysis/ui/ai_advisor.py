@@ -1010,9 +1010,12 @@ def show_ai_analysis():
     with st.expander("📌 输入给模型的数据预览", expanded=False):
         st.json(_json_safe(preview_context))
 
+    # 来自资金流向页「AI 投顾分析」按钮的自动触发
+    _auto_trigger = st.session_state.pop("ai_auto_trigger", False)
+
     col_g1, col_g2, col_g3 = st.columns([1, 1, 2])
     with col_g1:
-        generate_btn = st.button("生成解读", type="primary")
+        generate_btn = st.button("生成解读", type="primary") or _auto_trigger
     with col_g2:
         model_choice = st.selectbox(
             "模型",
