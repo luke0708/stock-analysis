@@ -269,9 +269,9 @@ def process_and_display(df, stock_code, analysis_date, actual_source, raw_df=Non
     # flow_summary 落 L2（当日 tick 不缓存，但汇总快照落库供跨页面复用）
     if tick_ctx and tick_ctx.get("flow_summary") and stock_code:
         try:
-            from stock_analysis.data.cache_store import CacheStore
+            from stock_analysis.data.cache_store import get_cache_store
             analysis_day = analysis_date.date() if hasattr(analysis_date, "date") else analysis_date
-            CacheStore().save_flow_summary(stock_code, str(analysis_day), tick_ctx["flow_summary"])
+            get_cache_store().save_flow_summary(stock_code, str(analysis_day), tick_ctx["flow_summary"])
         except Exception as _ce:
             import logging
             logging.getLogger(__name__).warning("flow_summary L2 写入失败: %s", _ce)
@@ -371,7 +371,7 @@ def display_results(stock_code, analysis_date):
         )
     with _btn_col:
         if st.button("🤖 AI 投顾分析", key="jump_to_ai", use_container_width=True):
-            st.session_state["page"] = "🤖 AI 投顾"
+            st.session_state["_navigate_to"] = "🤖 AI 投顾"
             st.session_state["ai_auto_trigger"] = True
             st.rerun()
 

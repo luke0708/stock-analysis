@@ -29,6 +29,17 @@ logger = logging.getLogger(__name__)
 
 _DB_PATH = Path(__file__).parent.parent.parent / "data" / "stock_cache.db"
 
+# 进程内单例，避免每次 CacheStore() 都执行 schema init / WAL 设置
+_instance: "CacheStore | None" = None
+
+
+def get_cache_store() -> "CacheStore":
+    """返回进程内共享的 CacheStore 单例。"""
+    global _instance
+    if _instance is None:
+        _instance = CacheStore()
+    return _instance
+
 # 当日数据在 15:05 后才算 final
 _MARKET_CLOSE_HOUR = 15
 _MARKET_CLOSE_MINUTE = 5

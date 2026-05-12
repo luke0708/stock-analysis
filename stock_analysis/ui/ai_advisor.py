@@ -22,8 +22,8 @@ from stock_analysis.analysis.price_range import PriceRangeAnalyzer
 def _load_stock_news(stock_code: str, limit: int) -> pd.DataFrame:
     """通过 CacheStore 获取新闻（1 小时 TTL）。"""
     try:
-        from stock_analysis.data.cache_store import CacheStore
-        return CacheStore().get_news(stock_code, limit=limit)
+        from stock_analysis.data.cache_store import get_cache_store
+        return get_cache_store().get_news(stock_code, limit=limit)
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning("cache_store.get_news failed: %s", exc)
@@ -35,9 +35,9 @@ def _load_daily_history(stock_code: str, end_date: date, window: int) -> pd.Data
     if not stock_code:
         return pd.DataFrame()
     try:
-        from stock_analysis.data.cache_store import CacheStore
+        from stock_analysis.data.cache_store import get_cache_store
         start_date = end_date - timedelta(days=window * 3)
-        return CacheStore().get_daily(stock_code, start=start_date, end=end_date)
+        return get_cache_store().get_daily(stock_code, start=start_date, end=end_date)
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning("cache_store.get_daily failed: %s", exc)
@@ -464,8 +464,8 @@ def _run_trend_signal_engine(
 
     # 先查 L2 缓存（命中则跳过重算）
     try:
-        from stock_analysis.data.cache_store import CacheStore
-        cached = CacheStore().get_trend_signal(stock_code, date_str)
+        from stock_analysis.data.cache_store import get_cache_store
+        cached = get_cache_store().get_trend_signal(stock_code, date_str)
         if cached:
             return cached
     except Exception as exc:
@@ -1121,8 +1121,8 @@ def show_ai_analysis():
                     _ts = context.get("trend_signal", {}) if isinstance(context, dict) else {}
                     _ad = entry.get("actual_date") or entry.get("requested_date")
                     if _ts.get("available") and _ad and entry.get("stock_code"):
-                        from stock_analysis.data.cache_store import CacheStore
-                        CacheStore().save_trend_signal(entry["stock_code"], str(_ad), _ts)
+                        from stock_analysis.data.cache_store import get_cache_store
+                        get_cache_store().save_trend_signal(entry["stock_code"], str(_ad), _ts)
                 except Exception as _ce:
                     import logging
                     logging.getLogger(__name__).warning("trend_signal L2 写入失败: %s", _ce)
