@@ -134,11 +134,13 @@ def _show_system_page(cache_mgr) -> None:
                     "reviewed":       "已复盘",
                     "avg_t1_pct":     "T+1均涨幅(%)",
                     "avg_t5_pct":     "T+5均涨幅(%)",
+                    "avg_t20_pct":    "T+20均涨幅(%)",
                 })
-                for col in ["T+1均涨幅(%)", "T+5均涨幅(%)"]:
-                    df_stats[col] = df_stats[col].apply(
-                        lambda v: f"{v:+.2f}" if v is not None else "—"
-                    )
+                for col in ["T+1均涨幅(%)", "T+5均涨幅(%)", "T+20均涨幅(%)"]:
+                    if col in df_stats.columns:
+                        df_stats[col] = df_stats[col].apply(
+                            lambda v: f"{v:+.2f}" if v is not None else "—"
+                        )
                 st.dataframe(df_stats, use_container_width=True, hide_index=True)
             else:
                 st.info("暂无复盘数据，生成 AI 建议后自动记录。")
