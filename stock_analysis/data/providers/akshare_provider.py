@@ -4,6 +4,13 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 from .base import StockDataProvider
 
+# 通达信行情服务器（2026-05 实测可用，稳定性优于 Eastmoney HTTP）
+_TDX_SERVERS = [
+    ('180.153.18.170', 7709),  # 上海，推荐首选
+    ('119.147.212.81', 7709),  # 广东
+    ('124.74.236.50',  7709),  # 上海备用
+]
+
 class AkShareProvider(StockDataProvider):
     def get_realtime_data(self, code: str) -> pd.DataFrame:
         """Alias for convenience, defaults to today"""
@@ -326,7 +333,48 @@ class AkShareProvider(StockDataProvider):
                 print(f"⚠️ Daily history fetch failed via Eastmoney (attempt {attempt+1}/3): {exc}")
                 time.sleep(1)
 
-        # Method 2: yfinance Fallback
+        # Method 2: pytdx 通达信直连（TCP，无 HTTP 限流问题）
+        if df.empty:
+            print(f"⚠️ Falling back to pytdx (通达信) for {code} daily history...")
+            try:
+                from pytdx.hq import TdxHq_API
+                # SH: 6/5/9 开头；其余为 SZ
+                market = 1 if code.startswith(("6", "5", "9")) else 0
+                # 从 start_date 到今天估算所需交易日数（加 buffer）
+                days_span = max((date.today() - start_date).days, 1)
+                bars_needed = min(int(days_span * 5 / 7) + 20, 800)
+
+                tdx_raw = []
+                for host, port in _TDX_SERVERS:
+                    try:
+                        api = TdxHq_API(raise_exception=True)
+                        api.connect(host, port)
+                        tdx_raw = api.get_security_bars(9, market, code, 0, bars_needed)
+                        api.disconnect()
+                        if tdx_raw:
+                            break
+                    except Exception as _e:
+                        print(f"⚠️ pytdx {host} 失败: {_e}")
+
+                if tdx_raw:
+                    temp_df = pd.DataFrame(tdx_raw)
+                    temp_df["日期"] = pd.to_datetime(temp_df["datetime"].str[:10])
+                    temp_df = temp_df[
+                        (temp_df["日期"].dt.date >= start_date) &
+                        (temp_df["日期"].dt.date <= end_date)
+                    ]
+                    temp_df = temp_df.rename(columns={
+                        "open": "开盘", "close": "收盘",
+                        "high": "最高", "low": "最低",
+                        "vol": "成交量", "amount": "成交额",
+                    })
+                    if not temp_df.empty:
+                        df = temp_df
+                        print(f"✅ Successfully fetched daily history for {code} via pytdx")
+            except Exception as exc:
+                print(f"❌ Fallback to pytdx failed for {code}: {exc}")
+
+        # Method 3: yfinance Fallback
         if df.empty:
             print(f"⚠️ Falling back to yfinance for {code} daily history...")
             try:
@@ -355,7 +403,7 @@ class AkShareProvider(StockDataProvider):
             except Exception as exc:
                 print(f"❌ Fallback to yfinance failed for {code}: {exc}")
 
-        # Method 3: akshare Tencent Fallback
+        # Method 4: akshare Tencent Fallback
         if df.empty:
             print(f"⚠️ Falling back to akshare Tencent for {code} daily history...")
             try:
