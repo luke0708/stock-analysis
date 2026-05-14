@@ -302,21 +302,73 @@ class AkShareProvider(StockDataProvider):
         return {"code": code, "name": "Unknown"}
         
     def get_history_data(self, code: str, start_date: date, end_date: date) -> pd.DataFrame:
-        try:
-            start_str = start_date.strftime("%Y%m%d")
-            end_str = end_date.strftime("%Y%m%d")
-            df = ak.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start_str,
-                end_date=end_str,
-                adjust="qfq",
-            )
-        except Exception as exc:
-            print(f"Daily history fetch failed: {exc}")
-            return pd.DataFrame()
+        start_str = start_date.strftime("%Y%m%d")
+        end_str = end_date.strftime("%Y%m%d")
+        
+        df = pd.DataFrame()
+        import time
+        
+        # Method 1: akshare Eastmoney with retries
+        for attempt in range(3):
+            try:
+                temp_df = ak.stock_zh_a_hist(
+                    symbol=code,
+                    period="daily",
+                    start_date=start_str,
+                    end_date=end_str,
+                    adjust="qfq",
+                )
+                if temp_df is not None and not temp_df.empty:
+                    df = temp_df
+                    print(f"✅ Successfully fetched daily history for {code} via Eastmoney (Attempt {attempt + 1})")
+                    break
+            except Exception as exc:
+                print(f"⚠️ Daily history fetch failed via Eastmoney (attempt {attempt+1}/3): {exc}")
+                time.sleep(1)
+
+        # Method 2: yfinance Fallback
+        if df.empty:
+            print(f"⚠️ Falling back to yfinance for {code} daily history...")
+            try:
+                import yfinance as yf
+                yf_symbol = f"{code}.SS" if code.startswith("6") or code.startswith("4") or code.startswith("8") else f"{code}.SZ"
+                yf_end = end_date + timedelta(days=1)
+                temp_df = yf.download(yf_symbol, start=start_date.strftime("%Y-%m-%d"), end=yf_end.strftime("%Y-%m-%d"), progress=False, auto_adjust=True)
+                if temp_df is not None and not temp_df.empty:
+                    temp_df = temp_df.reset_index()
+                    if isinstance(temp_df.columns, pd.MultiIndex):
+                        temp_df.columns = temp_df.columns.get_level_values(0)
+                    temp_df = temp_df.rename(columns={
+                        "Date": "日期",
+                        "Open": "开盘",
+                        "Close": "收盘",
+                        "High": "最高",
+                        "Low": "最低",
+                        "Volume": "成交量",
+                    })
+                    if "成交量" in temp_df.columns and "收盘" in temp_df.columns:
+                        temp_df["成交额"] = temp_df["成交量"] * temp_df["收盘"]
+                    else:
+                        temp_df["成交额"] = 0
+                    df = temp_df
+                    print(f"✅ Successfully fetched daily history for {code} via yfinance")
+            except Exception as exc:
+                print(f"❌ Fallback to yfinance failed for {code}: {exc}")
+
+        # Method 3: akshare Tencent Fallback
+        if df.empty:
+            print(f"⚠️ Falling back to akshare Tencent for {code} daily history...")
+            try:
+                prefix = "sh" if code.startswith("6") or code.startswith("4") or code.startswith("8") else "sz"
+                temp_df = ak.stock_zh_a_daily(symbol=f"{prefix}{code}", start_date=start_str, end_date=end_str)
+                if temp_df is not None and not temp_df.empty:
+                    df = temp_df
+                    print(f"✅ Successfully fetched daily history for {code} via Tencent")
+            except Exception as exc:
+                print(f"❌ Fallback to akshare Tencent failed for {code}: {exc}")
 
         if df is None or df.empty:
+            print(f"❌ All methods failed to fetch daily history for {code}")
             return pd.DataFrame()
 
         col_map = {
