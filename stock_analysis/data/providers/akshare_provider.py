@@ -186,124 +186,191 @@ class AkShareProvider(StockDataProvider):
             return empty_df
         return df
 
+    def _pytdx_daily_bars(self, code: str, count: int = 1):
+        """用 pytdx 拉最近 count 根日线，失败返回空列表。"""
+        from pytdx.hq import TdxHq_API
+        market = 1 if code.startswith(("6", "5", "9")) else 0
+        for host, port in _TDX_SERVERS:
+            try:
+                api = TdxHq_API(raise_exception=True)
+                api.connect(host, port)
+                data = api.get_security_bars(9, market, code, 0, count)
+                api.disconnect()
+                if data:
+                    return data
+            except Exception:
+                continue
+        return []
+
     def _get_last_trading_day(self, code: str) -> Optional[str]:
+        # pytdx: 只取 1 根日线，避免拉全量 Eastmoney 历史
         try:
-             # Fetch last 10 days daily bars to find the latest date
-             daily_df = ak.stock_zh_a_hist(symbol=code, period="daily", start_date="20230101", adjust="qfq")
-             if daily_df.empty:
-                 return None
-             last_date = str(daily_df.iloc[-1]['日期']).replace("-", "").replace("/", "")
-             return last_date
+            data = self._pytdx_daily_bars(code, 1)
+            if data:
+                return data[-1]['datetime'][:10].replace('-', '')
+        except Exception:
+            pass
+        # fallback: Eastmoney
+        try:
+            daily_df = ak.stock_zh_a_hist(symbol=code, period="daily", start_date="20230101", adjust="qfq")
+            if not daily_df.empty:
+                return str(daily_df.iloc[-1]['日期']).replace("-", "").replace("/", "")
         except Exception as e:
             print(f"Error finding last trading day: {e}")
-            return None
+        return None
 
     def _get_last_trading_day_before(self, code: str, date_str: str) -> Optional[str]:
+        target_date = datetime.strptime(date_str, "%Y%m%d").date()
+        # pytdx: 按日历天数估算所需日线数，过滤出 <= target_date 的最近一天
         try:
-            target_date = datetime.strptime(date_str, "%Y%m%d").date()
-            start_date = (target_date - timedelta(days=30)).strftime("%Y%m%d")
-            end_date = target_date.strftime("%Y%m%d")
-
-            daily_df = ak.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start_date,
-                adjust="qfq"
-            )
+            days_span = (date.today() - target_date).days + 5
+            bars_needed = min(int(days_span * 5 / 7) + 10, 60)
+            data = self._pytdx_daily_bars(code, bars_needed)
+            if data:
+                df = pd.DataFrame(data)
+                df['_d'] = pd.to_datetime(df['datetime'].str[:10]).dt.date
+                before = df[df['_d'] <= target_date].sort_values('_d')
+                if not before.empty:
+                    return before.iloc[-1]['_d'].strftime('%Y%m%d')
+        except Exception:
+            pass
+        # fallback: Eastmoney
+        try:
+            start_d = (target_date - timedelta(days=30)).strftime("%Y%m%d")
+            daily_df = ak.stock_zh_a_hist(symbol=code, period="daily", start_date=start_d, adjust="qfq")
             if daily_df.empty or '日期' not in daily_df.columns:
                 return None
-
             daily_df['日期'] = pd.to_datetime(daily_df['日期'], errors='coerce')
             daily_df = daily_df.dropna(subset=['日期']).sort_values('日期')
             daily_df = daily_df[daily_df['日期'].dt.date <= target_date]
             if daily_df.empty:
                 return None
-
-            last_date = daily_df.iloc[-1]['日期'].strftime("%Y%m%d")
-            return last_date
+            return daily_df.iloc[-1]['日期'].strftime("%Y%m%d")
         except Exception as e:
             print(f"Error finding last trading day before {date_str}: {e}")
-            return None
+        return None
 
     def _fetch_historical_tick(self, code: str, date_str: str) -> pd.DataFrame:
+        print(f"Downloading historical data (1-min bars) for {code} on {date_str}...")
+        raw_df = pd.DataFrame()
+
+        # Method 1: Eastmoney 1-min bars
         try:
-            print(f"Downloading historical data (1-min bars) for {code} on {date_str}...")
-            # Use EastMoney Minute Data (Robust)
-            # period="1" means 1 minute
-            # start_date, end_date need "YYYY-MM-DD HH:MM:SS"?? 
-            # stock_zh_a_hist_min_em params: symbol, start_date, end_date, period, adjust
-            # It expects specific format usually "2024-01-01 09:30:00"
-            
-            # Format date_str "20240101" -> "2024-01-01"
             d_fmt = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
-            start_dt = f"{d_fmt} 09:00:00"
-            end_dt =   f"{d_fmt} 17:00:00"
-            
-            df = ak.stock_zh_a_hist_min_em(symbol=code, start_date=start_dt, end_date=end_dt, period="1", adjust="qfq")
-            
-            if df.empty:
-                print(f"Minute data empty for {date_str}")
-                return pd.DataFrame()
-                
-            # 映射列名以确保包含所需字段
-            # akshare 的列名可能是 '时间', '开盘', '收盘', '最高', '最低', '成交量', '成交额'
-            # 建立一个映射字典
-            col_map = {
-                '开盘': '开盘', 'open': '开盘',
-                '收盘': '收盘', 'close': '收盘',
-                '最高': '最高', 'high': '最高',
-                '最低': '最低', 'low': '最低',
-                '成交量': '成交量', 'volume': '成交量',
-                '成交额': '成交额', 'amount': '成交额',
-                '时间': '时间', 'time': '时间'
-            }
-            
-            # 使用 rename 做宽容重命名
-            df = df.rename(columns=col_map)
-            
-            # 确保必要的列存在
-            required_cols = ['开盘', '收盘', '最高', '最低', '成交量', '成交额']
-            missing_cols = [c for c in required_cols if c not in df.columns]
-            
-            if missing_cols:
-                print(f"⚠️ Missing columns: {missing_cols}. Columns found: {df.columns.tolist()}")
-                # 尝试用现有列填充缺失列 (Fallback 策略)
-                if '收盘' in df.columns:
-                    for col in missing_cols:
-                        if col in ['开盘', '最高', '最低']:
-                            df[col] = df['收盘']
-                else:
-                    return pd.DataFrame() # 无法恢复
-
-            # 标准化 '成交额(元)' 列名
-            df['成交额(元)'] = df['成交额']
-            
-            # 修复 0 值 (EM 分钟数据开头常见)
-            cols_to_fix = ['开盘', '最高', '最低']
-            for col in cols_to_fix:
-                if col in df.columns:
-                     df.loc[df[col] == 0, col] = df.loc[df[col] == 0, '收盘']
-            
-            # Simulate '性质' (Type) based on Price Momentum (Close - Prev Close)
-            # Using candle color (Close > Open) is okay, but Minute bars are long.
-            # Using price change from previous minute is often a better proxy for flow direction.
-            
-            df['price_change'] = df['收盘'].diff()
-            df['price_change'] = df['price_change'].fillna(0) # First row neutral
-            
-            def get_type_from_momentum(change):
-                if change > 0: return '买盘'
-                if change < 0: return '卖盘'
-                return '中性盘'
-                
-            df['性质'] = df['price_change'].apply(get_type_from_momentum)
-            
-            print(f"✅ Successfully fetched {len(df)} 1-min bars as historical data.")
-            return df
-
+            temp = ak.stock_zh_a_hist_min_em(
+                symbol=code,
+                start_date=f"{d_fmt} 09:00:00",
+                end_date=f"{d_fmt} 17:00:00",
+                period="1", adjust="qfq",
+            )
+            if temp is not None and not temp.empty:
+                raw_df = temp
         except Exception as e:
-            print(f"Historical minute fetch failed for {date_str}: {e}")
-            return pd.DataFrame()
+            print(f"⚠️ Eastmoney 1-min failed for {date_str}: {e}")
+
+        # Method 2: pytdx 1-min bars fallback（返回已处理好的 df，直接用）
+        if raw_df.empty:
+            return self._fetch_historical_tick_pytdx(code, date_str)
+
+        # 处理 Eastmoney 数据
+        col_map = {
+            '开盘': '开盘', 'open': '开盘',
+            '收盘': '收盘', 'close': '收盘',
+            '最高': '最高', 'high': '最高',
+            '最低': '最低', 'low': '最低',
+            '成交量': '成交量', 'volume': '成交量',
+            '成交额': '成交额', 'amount': '成交额',
+            '时间': '时间', 'time': '时间',
+        }
+        df = raw_df.rename(columns=col_map)
+
+        required_cols = ['开盘', '收盘', '最高', '最低', '成交量', '成交额']
+        missing_cols = [c for c in required_cols if c not in df.columns]
+        if missing_cols:
+            print(f"⚠️ Missing columns: {missing_cols}. Columns found: {df.columns.tolist()}")
+            if '收盘' in df.columns:
+                for col in missing_cols:
+                    if col in ['开盘', '最高', '最低']:
+                        df[col] = df['收盘']
+            else:
+                return pd.DataFrame()
+
+        df['成交额(元)'] = df['成交额']
+        for col in ['开盘', '最高', '最低']:
+            if col in df.columns:
+                df.loc[df[col] == 0, col] = df.loc[df[col] == 0, '收盘']
+
+        df['price_change'] = df['收盘'].diff().fillna(0)
+        df['性质'] = df['price_change'].apply(
+            lambda c: '买盘' if c > 0 else ('卖盘' if c < 0 else '中性盘')
+        )
+        print(f"✅ Successfully fetched {len(df)} 1-min bars as historical data.")
+        return df
+
+    def _fetch_historical_tick_pytdx(self, code: str, date_str: str) -> pd.DataFrame:
+        """pytdx fallback：按偏移量拉历史 1 分钟线，处理后返回与 Eastmoney 路径相同格式。"""
+        try:
+            from pytdx.hq import TdxHq_API
+            target_date = datetime.strptime(date_str, "%Y%m%d").date()
+            market = 1 if code.startswith(("6", "5", "9")) else 0
+
+            for host, port in _TDX_SERVERS:
+                try:
+                    api = TdxHq_API(raise_exception=True)
+                    api.connect(host, port)
+
+                    # Step 1: 用日线确认 target_date 距今几个交易日
+                    days_span = (date.today() - target_date).days + 5
+                    daily_data = api.get_security_bars(9, market, code, 0, min(int(days_span * 5 / 7) + 10, 60))
+                    if not daily_data:
+                        api.disconnect()
+                        continue
+
+                    df_daily = pd.DataFrame(daily_data)
+                    df_daily['_d'] = pd.to_datetime(df_daily['datetime'].str[:10]).dt.date
+                    dates = sorted(df_daily['_d'].tolist())
+                    if target_date not in dates:
+                        api.disconnect()
+                        continue
+
+                    # 每天 240 根 1-min 线，offset = 距最近交易日的天数 * 240
+                    offset = (len(dates) - 1 - dates.index(target_date)) * 240
+                    min_data = api.get_security_bars(8, market, code, offset, 260)
+                    api.disconnect()
+
+                    if not min_data:
+                        continue
+
+                    df = pd.DataFrame(min_data)
+                    df = df[df['datetime'].str[:10] == str(target_date)].copy()
+                    if df.empty:
+                        continue
+
+                    df = df.rename(columns={
+                        'open': '开盘', 'close': '收盘', 'high': '最高', 'low': '最低',
+                        'vol': '成交量', 'amount': '成交额',
+                    })
+                    df['时间'] = df['datetime'].str[11:]
+                    df['成交额(元)'] = df['成交额']
+                    for col in ['开盘', '最高', '最低']:
+                        if col in df.columns:
+                            df.loc[df[col] == 0, col] = df.loc[df[col] == 0, '收盘']
+
+                    df['price_change'] = df['收盘'].diff().fillna(0)
+                    df['性质'] = df['price_change'].apply(
+                        lambda c: '买盘' if c > 0 else ('卖盘' if c < 0 else '中性盘')
+                    )
+                    print(f"✅ Historical 1-min bars via pytdx for {code} on {date_str} ({len(df)} rows)")
+                    return df.reset_index(drop=True)
+
+                except Exception as e:
+                    print(f"⚠️ pytdx min fallback {host} failed: {e}")
+                    continue
+        except Exception as e:
+            print(f"❌ pytdx historical tick fallback error: {e}")
+
+        print(f"Minute data empty for {date_str}")
+        return pd.DataFrame()
 
     def get_stock_info(self, code: str) -> dict:
         return {"code": code, "name": "Unknown"}
