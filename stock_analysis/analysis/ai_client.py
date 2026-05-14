@@ -23,10 +23,10 @@ def call_deepseek(
     api_key: str,
     system_prompt: str,
     user_prompt: str,
-    model: str = "deepseek-chat",
+    model: str = "deepseek-v4-flash",
     temperature: float = 0.2,
-    max_tokens: int = 800,
-    timeout: int = 60,
+    max_tokens: int = 4000,
+    timeout: int = 90,
     max_retries: int = 2
 ) -> str:
     url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").rstrip("/") + "/chat/completions"
@@ -80,12 +80,16 @@ def call_deepseek(
                 time.sleep(1.5 ** attempt)
                 continue
             raise RuntimeError("Empty response from DeepSeek.")
-        content = choices[0].get("message", {}).get("content")
+            
+        message = choices[0].get("message", {})
+        content = message.get("content", "")
+        
         if not content:
             if attempt < max_retries:
                 time.sleep(1.5 ** attempt)
                 continue
             raise RuntimeError("Empty response from DeepSeek.")
+            
         return content.strip()
 
     if last_error:

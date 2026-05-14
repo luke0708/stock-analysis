@@ -279,5 +279,29 @@ class JobStore:
             "result": result,
         }
 
+    def delete_job(self, job_id: str, *, delete_result: bool = True) -> Dict[str, int]:
+        """Delete one job and (optionally) its persisted result snapshot."""
+        if not job_id:
+            return {"job_deleted": 0, "result_deleted": 0}
+
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            result_deleted = 0
+            if delete_result:
+                cur_result = conn.execute(
+                    "DELETE FROM analysis_results WHERE job_id = ?",
+                    (job_id,),
+                )
+                result_deleted = int(cur_result.rowcount or 0)
+
+            cur_job = conn.execute(
+                "DELETE FROM analysis_jobs WHERE job_id = ?",
+                (job_id,),
+            )
+            job_deleted = int(cur_job.rowcount or 0)
+            conn.commit()
+
+        return {"job_deleted": job_deleted, "result_deleted": result_deleted}
+
 
 __all__ = ["JobStore", "JobStatus"]

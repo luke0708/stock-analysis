@@ -23,9 +23,6 @@ class Settings(BaseModel):
     # Default stocks for demo
     DEFAULT_STOCKS: list[str] = ["300661", "300059", "600519"]
     
-    # Data Provider Priority ("tushare" or "akshare")
-    PREFERRED_PROVIDER: str = "tushare"
-    
     def init_dirs(self):
         self.DATA_DIR.mkdir(exist_ok=True)
         self.CACHE_DIR.mkdir(exist_ok=True)
